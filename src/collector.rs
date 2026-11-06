@@ -218,14 +218,145 @@ impl<T> Batch<T> {
     }
 }
 
+struct LastEpoch<T> {
+    begin: Cell<*const Entry<T>>,
+    guards: Cell<usize>,
+}
+
+impl<T> LastEpoch<T> {
+    fn is_active(&self) -> bool {
+        self.guards.get() > 0
+    }
+
+    fn leave(&self) -> usize {
+        let existing_guards = self.guards.get();
+        self.guards.set(existing_guards - 1);
+        existing_guards
+    }
+}
+
+struct CurrentEpoch {
+    guards: Cell<usize>,
+    /// the times of all pins
+    pins: Cell<usize>,
+}
+
+impl CurrentEpoch {
+    fn is_active(&self) -> bool {
+        self.guards.get() > 0
+    }
+
+    fn enter(&self) -> usize {
+        let existing_guards = self.guards.get();
+        self.guards.set(
+            existing_guards
+                .checked_add(1)
+                .expect("active epoch guards overflow"),
+        );
+        // make sure the counter does not overflow
+        self.pins.update(|pins| pins.saturating_add(1));
+        existing_guards
+    }
+
+    fn leave(&self) -> usize {
+        let existing_guards = self.guards.get();
+        self.guards.set(existing_guards - 1);
+        existing_guards
+    }
+}
+
+type EpochID = usize;
+
 /// Thread local state of the collector, exclusively owned by the thread
 struct ThreadState<T> {
     /// the thread local batch
     batch: Cell<NonNull<Batch<T>>>,
-    /// the active guard count
-    guards: Cell<usize>,
     /// the flush threshold
     flush_threshold: Cell<usize>,
+    /// the current epoch id
+    epoch_id: Cell<EpochID>,
+    /// the last epoch
+    last_epoch: LastEpoch<T>,
+    /// the current epoch
+    current_epoch: CurrentEpoch,
+}
+
+enum EnterAction {
+    None(EpochID),
+    Activate(EpochID),
+}
+
+enum LeaveAction<'a, T> {
+    /// No action needed
+    None,
+    /// The current epoch is drained, but the last epoch is still active, defer the release to the last epoch
+    Defer,
+    /// The current epoch is drained, and the last epoch is inactive, deactivate the current epoch
+    Deactivate,
+    /// The last epoch is drained, but the current epoch is still active, only need to release the last epoch
+    Release(&'a LastEpoch<T>),
+    /// The last epoch is drained, and the current epoch is inactive, deactivate and release the last epoch
+    DeactivateAndRelease(&'a LastEpoch<T>),
+}
+
+impl<T> ThreadState<T> {
+    fn can_advance_epoch(&self, epoch_size: usize) -> bool {
+        epoch_size > 0
+            && self.current_epoch.pins.get() >= epoch_size
+            && !self.last_epoch.is_active()
+    }
+
+    /// Advance the epoch after detaching the retired list
+    fn advance_epoch(&self, detached: *const Entry<T>) {
+        let last_epoch = &self.last_epoch;
+        let current_epoch = &self.current_epoch;
+        last_epoch.guards.set(current_epoch.guards.replace(0));
+        last_epoch.begin.set(detached);
+        current_epoch.pins.set(0);
+        self.epoch_id.update(|epoch| epoch.wrapping_add(1));
+    }
+
+    fn enter(&self) -> EnterAction {
+        let current_epoch = &self.current_epoch;
+        let epoch_id = self.epoch_id.get();
+        if current_epoch.enter() == 0 {
+            if self.last_epoch.is_active() {
+                EnterAction::None(epoch_id)
+            } else {
+                EnterAction::Activate(epoch_id)
+            }
+        } else {
+            EnterAction::None(epoch_id)
+        }
+    }
+
+    fn leave(&'_ self, epoch_id: EpochID) -> LeaveAction<'_, T> {
+        let current_epoch_id = self.epoch_id.get();
+        if epoch_id == current_epoch_id {
+            let current_epoch = &self.current_epoch;
+            if current_epoch.leave() == 1 {
+                if self.last_epoch.is_active() {
+                    LeaveAction::Defer
+                } else {
+                    LeaveAction::Deactivate
+                }
+            } else {
+                LeaveAction::None
+            }
+        } else {
+            debug_assert_eq!(epoch_id, current_epoch_id.wrapping_sub(1));
+            let last_epoch = &self.last_epoch;
+            if last_epoch.leave() == 1 {
+                if self.current_epoch.is_active() {
+                    LeaveAction::Release(last_epoch)
+                } else {
+                    LeaveAction::DeactivateAndRelease(last_epoch)
+                }
+            } else {
+                LeaveAction::None
+            }
+        }
+    }
 }
 
 // SAFETY: handles provide exclusive logical ownership of the cells,
@@ -253,6 +384,8 @@ where
 {
     /// once a batch reaches this size, try to retire it
     batch_size: usize,
+    /// once the total guards created in an epoch reach this size, try to advance the epoch
+    epoch_size: usize,
     /// the thread local state
     state: ThreadLocal<CachePadded<ThreadState<T>>>,
     retired: ThreadLocal<CachePadded<AtomicPtr<Entry<T>>>>,
@@ -263,29 +396,32 @@ where
     T: Send,
 {
     #[cfg(not(feature = "_loom"))]
-    pub const fn new(batch_size: usize) -> Self {
+    pub const fn new(batch_size: usize, epoch_size: usize) -> Self {
         assert!(batch_size > 0, "batch size must be greater than 0");
         Self {
             batch_size,
+            epoch_size,
             state: ThreadLocal::new(),
             retired: ThreadLocal::new(),
         }
     }
 
     #[cfg(feature = "_loom")]
-    pub fn new(batch_size: usize) -> Self {
+    pub fn new(batch_size: usize, epoch_size: usize) -> Self {
         assert!(batch_size > 0, "batch size must be greater than 0");
         Self {
             batch_size,
+            epoch_size,
             state: ThreadLocal::new(),
             retired: ThreadLocal::new(),
         }
     }
 
-    pub fn with_threads(batch_size: usize, threads: usize) -> Self {
+    pub fn with_threads(batch_size: usize, epoch_size: usize, threads: usize) -> Self {
         assert!(batch_size > 0, "batch size must be greater than 0");
         Self {
             batch_size,
+            epoch_size,
             state: ThreadLocal::with_capacity(threads),
             retired: ThreadLocal::with_capacity(threads),
         }
@@ -364,8 +500,16 @@ where
     fn new_thread_state(&self) -> CachePadded<ThreadState<T>> {
         CachePadded::new(ThreadState {
             batch: Cell::new(self.new_batch()),
-            guards: Cell::new(0),
             flush_threshold: Cell::new(self.batch_size),
+            epoch_id: Cell::new(0),
+            last_epoch: LastEpoch {
+                begin: Cell::new(std::ptr::null()),
+                guards: Cell::new(0),
+            },
+            current_epoch: CurrentEpoch {
+                guards: Cell::new(0),
+                pins: Cell::new(0),
+            },
         })
     }
 
@@ -560,7 +704,7 @@ mod loom_test {
         loom::model(|| {
             let flag = Arc::new(AtomicBool::new(false));
             let data = Arc::new(AtomicUsize::new(usize::MAX));
-            let collector = Arc::new(Collector::<Arc<AtomicUsize>>::new(1));
+            let collector = Arc::new(Collector::<Arc<AtomicUsize>>::new(1, 0));
             let handle = collector.make_local_handle();
 
             let flag_clone = flag.clone();
