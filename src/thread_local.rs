@@ -1,5 +1,4 @@
-use crate::loom_support::{AtomicPtr, Cell, Mutex};
-use crate::loom_support::{AtomicU8, UnsafeCell};
+use crate::loom_support::{AtomicPtr, AtomicU8, AtomicUsize, Cell, Mutex, UnsafeCell};
 use std::array::from_fn;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -22,6 +21,7 @@ loom::thread_local! {
 }
 
 type ThreadID = usize;
+type AtomicThreadID = AtomicUsize;
 
 const INVALID_THREAD_ID: ThreadID = 0;
 const BUCKET_COUNT: usize = ThreadID::BITS as usize;
@@ -96,34 +96,69 @@ impl Drop for OwnedThread {
 }
 
 struct ThreadManager {
-    free_from: ThreadID,
-    free_list: BinaryHeap<Reverse<ThreadID>>,
+    free_from: AtomicThreadID,
+    free_list: Mutex<BinaryHeap<Reverse<ThreadID>>>,
 }
 
 impl ThreadManager {
+    #[cfg(not(feature = "_loom"))]
     const fn new() -> Self {
         Self {
-            free_from: 1,
-            free_list: BinaryHeap::new(),
+            free_from: AtomicThreadID::new(1),
+            free_list: Mutex::new(BinaryHeap::new()),
         }
     }
 
-    fn allocate(&mut self) -> ThreadID {
-        if let Some(Reverse(id)) = self.free_list.pop() {
+    #[cfg(feature = "_loom")]
+    fn new() -> Self {
+        Self {
+            free_from: AtomicThreadID::new(1),
+            free_list: Mutex::new(BinaryHeap::new()),
+        }
+    }
+
+    #[cfg(not(feature = "_loom"))]
+    fn free_list(&self) -> impl DerefMut<Target = BinaryHeap<Reverse<ThreadID>>> {
+        self.free_list.lock()
+    }
+
+    #[cfg(feature = "_loom")]
+    fn free_list(&self) -> impl DerefMut<Target = BinaryHeap<Reverse<ThreadID>>> {
+        self.free_list.lock().unwrap()
+    }
+
+    fn allocate(&self) -> ThreadID {
+        let mut free_list = self.free_list();
+        if let Some(Reverse(id)) = free_list.pop() {
             id
         } else {
-            let id = self.free_from;
+            // the free list mutex protects the free-from counter
+            let id = self.free_from.load(Ordering::Relaxed);
             if id == ThreadID::MAX {
                 std::hint::cold_path();
                 panic!("too many threads");
             }
-            self.free_from += 1;
+            // [`Ordering::SeqCst`] here to synchronize with potential fence outside [`Self::thread_id_limit_hint`]
+            self.free_from.store(id + 1, Ordering::SeqCst);
+            // loom cannot handle [`Ordering::SeqCst`] on atomic variables properly
+            #[cfg(feature = "_loom")]
+            crate::loom_support::fence(Ordering::SeqCst);
             id
         }
     }
 
-    fn free(&mut self, id: ThreadID) {
-        self.free_list.push(Reverse(id));
+    fn free(&self, id: ThreadID) {
+        self.free_list().push(Reverse(id));
+    }
+
+    /// Returns an exclusive upper-bound hint for issued thread IDs.
+    ///
+    /// Without external synchronization this is only a weak snapshot and may omit IDs issued concurrently.
+    ///
+    /// If a `SeqCst` fence is sequenced before this call, the returned bound includes every ID whose `SeqCst` issuance
+    /// store precedes that fence in the global `SeqCst` order. IDs issued after the fence may still be omitted.
+    fn thread_id_limit_hint(&self) -> ThreadID {
+        self.free_from.load(Ordering::Relaxed)
     }
 }
 
@@ -149,18 +184,15 @@ fn current_thread() -> Thread {
     })
 }
 
-fn thread_manager() -> impl DerefMut<Target = ThreadManager> {
+fn thread_manager() -> &'static ThreadManager {
     #[cfg(not(feature = "_loom"))]
-    static MANAGER: crate::loom_support::LazyLock<Mutex<ThreadManager>> =
-        crate::loom_support::LazyLock::new(|| Mutex::new(ThreadManager::new()));
+    static MANAGER: crate::loom_support::LazyLock<ThreadManager> =
+        crate::loom_support::LazyLock::new(|| ThreadManager::new());
     #[cfg(feature = "_loom")]
     crate::loom_support::lazy_static! {
-        static ref MANAGER: Mutex<ThreadManager> = Mutex::new(ThreadManager::new());
+        static ref MANAGER: ThreadManager = ThreadManager::new();
     }
-    let manager = MANAGER.lock();
-    #[cfg(feature = "_loom")]
-    let manager = manager.unwrap();
-    manager
+    &*MANAGER
 }
 
 struct Entry<T> {
@@ -401,8 +433,8 @@ where
     fn allocate_bucket(bucket: usize) -> *mut [Entry<T>] {
         let entries = repeat_with(Entry::default)
             .take(bucket_size(bucket))
-            .collect::<Vec<_>>();
-        Box::into_raw(entries.into_boxed_slice())
+            .collect::<Box<[_]>>();
+        Box::into_raw(entries)
     }
 
     /// # Safety
@@ -521,15 +553,42 @@ where
         self.get_or_init_inner(&thread.thread, provider)
     }
 
-    pub fn iter(&'_ self) -> Iter<'_, T>
+    /// Returns an iterator over all thread local entries.
+    ///
+    /// Weak snapshot:
+    /// - The iterator may not observe an entry initialized concurrently by another thread.
+    /// - The iterator may and usually observe entries initialized by already exited threads, since entries are not removed when threads exit.
+    ///
+    /// However, there is a notable special exception in this project:
+    /// If an external [`Ordering::SeqCst`] fence sequenced before the iteration forms a sequentially consistent order with other [`Ordering::SeqCst`]
+    /// operations on the values of this thread local, the iteration is guaranteed to not violate the visibility required by that order.
+    pub fn iter(&'_ self) -> impl Iterator<Item = DefaultEntryValue<'_, T>>
     where
         T: Sync,
     {
-        Iter {
-            thread_local: self,
-            bucket: 0,
-            entry: 0,
-        }
+        let thread_limit = thread_manager().thread_id_limit_hint();
+        let bucket_limit = bucket_at(thread_limit);
+        let entry_limit = entry_at(thread_limit);
+        self.buckets
+            .iter()
+            .enumerate()
+            // only these buckets may contain initialized entries
+            .take(bucket_limit + 1)
+            .flat_map(move |(bucket_id, bucket)| {
+                let bucket = bucket.load(Ordering::Acquire).cast_const();
+                if bucket.is_null() {
+                    &[]
+                } else {
+                    let len = if bucket_id < bucket_limit {
+                        bucket_size(bucket_id)
+                    } else {
+                        entry_limit
+                    };
+                    // Safety: the bucket is allocated as a boxed slice
+                    unsafe { std::slice::from_raw_parts(bucket, len) }
+                }
+            })
+            .flat_map(Entry::get)
     }
 }
 
@@ -551,50 +610,6 @@ where
                         bucket_ptr,
                         bucket_size(bucket),
                     ));
-                }
-            }
-        }
-    }
-}
-
-pub struct Iter<'a, T>
-where
-    T: Send,
-{
-    thread_local: &'a ThreadLocal<T>,
-    bucket: usize,
-    entry: usize,
-}
-
-impl<'a, T> Iterator for Iter<'a, T>
-where
-    T: Send,
-{
-    type Item = DefaultEntryValue<'a, T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.bucket >= BUCKET_COUNT {
-                return None;
-            }
-            let bucket = self.thread_local.buckets[self.bucket].load(Ordering::Acquire);
-            if bucket.is_null() {
-                self.bucket += 1;
-                continue;
-            }
-            loop {
-                if self.entry == bucket_size(self.bucket) {
-                    self.entry = 0;
-                    self.bucket += 1;
-                    break;
-                }
-                // SAFETY: the loop bounds keep `self.entry` within this bucket.
-                let entry = unsafe { &*bucket.add(self.entry) };
-                self.entry += 1;
-                if let Some(value) = entry.get() {
-                    return Some(value);
-                } else {
-                    continue;
                 }
             }
         }

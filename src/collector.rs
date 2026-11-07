@@ -539,7 +539,7 @@ where
     ) -> Option<usize> {
         let mut marked = 0usize;
         let mut entries_iterator = batch.entries.iter_mut();
-        // synchronize with the [`Ordering::SeqCst`] store in [`Self::enter`]
+        // synchronize with the [`Ordering::SeqCst`] store in [`Self::enter`], also complies with the special exception of [`ThreadLocal::iter`]
         loom_support::fence(Ordering::SeqCst);
         for head in self
             .retired

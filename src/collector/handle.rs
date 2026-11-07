@@ -38,7 +38,7 @@ where
             }
             EnterAction::Activate(epoch_id) => {
                 let retired_list = self.retired_list();
-                // synchronize with the [`Ordering::SeqCst`] barrier in [`Self::flush_batch`]
+                // synchronize with the [`Ordering::SeqCst`] barrier in [`Collector::flush_batch`]
                 retired_list.store(std::ptr::null_mut(), Ordering::SeqCst);
                 // loom cannot handle [`Ordering::SeqCst`] on atomic variables properly
                 #[cfg(feature = "_loom")]
