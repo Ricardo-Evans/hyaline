@@ -426,6 +426,7 @@ where
     buckets: [AtomicPtr<Entry<T>>; BUCKET_COUNT],
 }
 
+#[allow(dead_code)]
 impl<T> ThreadLocal<T>
 where
     T: Send,
@@ -516,10 +517,24 @@ where
         self.get_inner(&current_thread())
     }
 
+    /// Get a reference to the value in the thread local storage for the given thread, if it exists.
     pub fn get_by_thread<'a>(
         &'a self,
         thread: &'a OwnedThread,
     ) -> Option<DefaultEntryValue<'a, T>> {
+        self.get_inner(&thread.thread)
+    }
+
+    /// Get a reference to the value in the thread local storage for the given thread, if it exists.
+    /// Similar to [`Self::get_by_thread`], but without lifetime checks.
+    /// This may be very useful when the owner thread wants to cache the TLS value and forms a self-referenced struct.
+    ///
+    /// # Safety
+    /// The caller must ensure the thread lives longer than the returned value.
+    pub unsafe fn get_by_thread_unsafe(
+        &'_ self,
+        thread: &OwnedThread,
+    ) -> Option<DefaultEntryValue<'_, T>> {
         self.get_inner(&thread.thread)
     }
 
@@ -535,14 +550,14 @@ where
         unsafe { entry.get_or_init(provider) }
     }
 
-    /// Returns a reference to the value in the thread local storage for the current thread or creates a new one if it doesn't exist.
+    /// Get a reference to the value in the thread local storage for the current thread or creates a new one if it doesn't exist.
     ///
     /// The given `provider` function is only called if the initialization is required, and it must guarantee no recursive initialization.
     pub fn get_or_init(&self, provider: impl FnOnce() -> T) -> DefaultEntryValue<'_, T> {
         self.get_or_init_inner(&current_thread(), provider)
     }
 
-    /// Returns a reference to the value in the thread local storage for the given thread or creates a new one if it doesn't exist.
+    /// Get a reference to the value in the thread local storage for the given thread or creates a new one if it doesn't exist.
     ///
     /// The given `provider` function is only called if the initialization is required, and it must guarantee no recursive initialization.
     pub fn get_or_init_by_thread<'a>(
@@ -550,6 +565,20 @@ where
         thread: &'a OwnedThread,
         provider: impl FnOnce() -> T,
     ) -> DefaultEntryValue<'a, T> {
+        self.get_or_init_inner(&thread.thread, provider)
+    }
+
+    /// Get a reference to the value in the thread local storage for the given thread or creates a new one if it doesn't exist.
+    /// Similar to [`Self::get_or_init_by_thread`], but without lifetime checks.
+    /// This may be very useful when the owner thread wants to cache the TLS value and forms a self-referenced struct.
+    ///
+    /// # Safety
+    /// The caller must ensure the thread lives longer than the returned value.
+    pub unsafe fn get_or_init_by_thread_unsafe(
+        &'_ self,
+        thread: &OwnedThread,
+        provider: impl FnOnce() -> T,
+    ) -> DefaultEntryValue<'_, T> {
         self.get_or_init_inner(&thread.thread, provider)
     }
 

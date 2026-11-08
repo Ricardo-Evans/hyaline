@@ -27,6 +27,7 @@ mod normal {
     pub(super) struct EntryStates<'a, T>(PhantomData<&'a T>);
 
     impl<T> EntryState<T> {
+        #[inline]
         pub(super) fn mark<'a>(&mut self, head: TLSRetiredList<'a, T>, _: &mut EntryStates<'a, T>) {
             self.head = &*head;
         }
@@ -36,6 +37,7 @@ mod normal {
         /// # Safety
         ///
         /// The state must have been marked at lease once from the last unmark.
+        #[inline]
         pub(super) unsafe fn unmark<'a>(
             &mut self,
             _: &mut EntryStates<'a, T>,
@@ -49,6 +51,7 @@ mod normal {
         /// # Safety
         ///
         /// The entry must be unpublished and exclusively accessed.
+        #[inline]
         pub(super) unsafe fn link(&mut self, next: *const Entry<T>) {
             self.next = next;
         }
@@ -58,6 +61,7 @@ mod normal {
         /// # Safety
         ///
         /// The entry must have been linked and remain alive.
+        #[inline]
         pub(super) unsafe fn next(&self) -> *const Entry<T> {
             // SAFETY: `link` initialized the active `next` union field.
             unsafe { self.next }
@@ -65,6 +69,7 @@ mod normal {
     }
 
     impl<T> Default for EntryState<T> {
+        #[inline]
         fn default() -> Self {
             Self {
                 next: std::ptr::null(),
@@ -73,6 +78,7 @@ mod normal {
     }
 
     impl<T> Default for EntryStates<'_, T> {
+        #[inline]
         fn default() -> Self {
             Self(PhantomData)
         }
@@ -99,6 +105,7 @@ mod loom {
     }
 
     impl<T> EntryState<T> {
+        #[inline]
         pub(super) fn mark<'a>(
             &mut self,
             head: TLSRetiredList<'a, T>,
@@ -117,6 +124,7 @@ mod loom {
         /// # Safety
         ///
         /// The state must have been marked at lease once from the last unmark.
+        #[inline]
         pub(super) unsafe fn unmark<'a>(
             &mut self,
             states: &mut EntryStates<'a, T>,
@@ -135,6 +143,7 @@ mod loom {
         /// # Safety
         ///
         /// The entry must be unpublished and exclusively accessed.
+        #[inline]
         pub(super) unsafe fn link(&mut self, next: *const Entry<T>) {
             *self = EntryState::Shared(next);
         }
@@ -144,6 +153,7 @@ mod loom {
         /// # Safety
         ///
         /// The entry must have been linked and remain alive.
+        #[inline]
         pub(super) unsafe fn next(&self) -> *const Entry<T> {
             match self {
                 EntryState::Empty => std::ptr::null(),
@@ -154,6 +164,7 @@ mod loom {
     }
 
     impl<T> Default for EntryStates<'_, T> {
+        #[inline]
         fn default() -> Self {
             Self(HashMap::default())
         }
@@ -178,6 +189,7 @@ impl<T> Entry<T> {
     /// Since the [`Entry`] is not a zero-sized type, this value can never be a valid pointer.
     const INACTIVE: *mut Entry<T> = std::ptr::without_provenance_mut(usize::MAX);
 
+    #[inline]
     fn new(data: T, operation: fn(T), batch: NonNull<Batch<T>>) -> Self {
         Self {
             data,
@@ -199,6 +211,7 @@ struct Batch<T> {
 }
 
 impl<T> Batch<T> {
+    #[inline]
     fn with_capacity(capacity: usize) -> Box<Self> {
         Box::new(Self {
             references: AtomicUsize::new(0),
@@ -207,10 +220,12 @@ impl<T> Batch<T> {
         })
     }
 
+    #[inline]
     fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[inline]
     fn free(self: Box<Self>) {
         self.entries
             .into_iter()
@@ -224,10 +239,12 @@ struct LastEpoch<T> {
 }
 
 impl<T> LastEpoch<T> {
+    #[inline]
     fn is_active(&self) -> bool {
         self.guards.get() > 0
     }
 
+    #[inline]
     fn leave(&self) -> usize {
         let existing_guards = self.guards.get();
         self.guards.set(existing_guards - 1);
@@ -242,10 +259,12 @@ struct CurrentEpoch {
 }
 
 impl CurrentEpoch {
+    #[inline]
     fn is_active(&self) -> bool {
         self.guards.get() > 0
     }
 
+    #[inline]
     fn enter(&self) -> usize {
         let existing_guards = self.guards.get();
         self.guards.set(
@@ -258,6 +277,7 @@ impl CurrentEpoch {
         existing_guards
     }
 
+    #[inline]
     fn leave(&self) -> usize {
         let existing_guards = self.guards.get();
         self.guards.set(existing_guards - 1);
@@ -300,6 +320,7 @@ enum LeaveAction<'a, T> {
 }
 
 impl<T> ThreadState<T> {
+    #[inline]
     fn can_advance_epoch(&self, epoch_size: usize) -> bool {
         epoch_size > 0
             && self.current_epoch.pins.get() >= epoch_size
@@ -307,6 +328,7 @@ impl<T> ThreadState<T> {
     }
 
     /// Advance the epoch after detaching the retired list
+    #[inline]
     fn advance_epoch(&self, detached: *const Entry<T>) {
         let last_epoch = &self.last_epoch;
         let current_epoch = &self.current_epoch;
@@ -316,6 +338,7 @@ impl<T> ThreadState<T> {
         self.epoch_id.update(|epoch| epoch.wrapping_add(1));
     }
 
+    #[inline]
     fn enter(&self) -> EnterAction {
         let current_epoch = &self.current_epoch;
         let epoch_id = self.epoch_id.get();
@@ -330,6 +353,7 @@ impl<T> ThreadState<T> {
         }
     }
 
+    #[inline]
     fn leave(&'_ self, epoch_id: EpochID) -> LeaveAction<'_, T> {
         let current_epoch_id = self.epoch_id.get();
         if epoch_id == current_epoch_id {
@@ -457,15 +481,22 @@ where
         }
     }
 
-    fn owned_thread_state<'a>(&'a self, thread: &'a OwnedThread) -> TLSThreadState<'a, T> {
-        if let Some(state) = self.state.get_by_thread(thread) {
-            state.map(Deref::deref)
-        } else {
-            // only need to initialize the thread state at most once for every single thread
-            std::hint::cold_path();
-            self.state
-                .get_or_init_by_thread(thread, || self.new_thread_state())
-                .map(Deref::deref)
+    /// Get the thread state for the given thread.
+    ///
+    /// # Safety
+    /// The caller must ensure the thread lives longer than the returned value.
+    unsafe fn owned_thread_state(&'_ self, thread: &OwnedThread) -> TLSThreadState<'_, T> {
+        // Safety: this is why this function is unsafe
+        unsafe {
+            if let Some(state) = self.state.get_by_thread_unsafe(thread) {
+                state.map(Deref::deref)
+            } else {
+                // only need to initialize the thread state at most once for every single thread
+                std::hint::cold_path();
+                self.state
+                    .get_or_init_by_thread_unsafe(thread, || self.new_thread_state())
+                    .map(Deref::deref)
+            }
         }
     }
 
@@ -481,22 +512,31 @@ where
         }
     }
 
-    fn owned_retired_list<'a>(&'a self, thread: &'a OwnedThread) -> TLSRetiredList<'a, T> {
-        if let Some(retired_list) = self.retired.get_by_thread(thread) {
-            retired_list.map(Deref::deref)
-        } else {
-            // only need to initialize the retired list at most once for every single thread
-            std::hint::cold_path();
-            self.retired
-                .get_or_init_by_thread(thread, || self.new_retired_list())
-                .map(Deref::deref)
+    /// Get the retired list for the given thread.
+    ///
+    /// # Safety
+    /// The caller must ensure the thread lives longer than the returned value.
+    unsafe fn owned_retired_list(&'_ self, thread: &OwnedThread) -> TLSRetiredList<'_, T> {
+        // Safety: this is why this function is unsafe
+        unsafe {
+            if let Some(retired_list) = self.retired.get_by_thread_unsafe(thread) {
+                retired_list.map(Deref::deref)
+            } else {
+                // only need to initialize the retired list at most once for every single thread
+                std::hint::cold_path();
+                self.retired
+                    .get_or_init_by_thread_unsafe(thread, || self.new_retired_list())
+                    .map(Deref::deref)
+            }
         }
     }
 
+    #[inline]
     fn new_batch(&self) -> NonNull<Batch<T>> {
         Box::leak(Batch::with_capacity(self.batch_size)).into()
     }
 
+    #[inline]
     fn new_thread_state(&self) -> CachePadded<ThreadState<T>> {
         CachePadded::new(ThreadState {
             batch: Cell::new(self.new_batch()),
@@ -513,6 +553,7 @@ where
         })
     }
 
+    #[inline]
     fn new_retired_list(&self) -> CachePadded<AtomicPtr<Entry<T>>> {
         CachePadded::new(AtomicPtr::new(Entry::<T>::INACTIVE))
     }

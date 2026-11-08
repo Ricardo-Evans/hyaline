@@ -18,6 +18,7 @@ where
 
     fn retired_list(&'_ self) -> TLSRetiredList<'_, T>;
 
+    #[inline]
     fn enter(&'_ self) -> Guard<'_, T, Self> {
         let state = self.thread_state();
         let collector = self.collector();
@@ -79,6 +80,7 @@ where
         }
     }
 
+    #[inline]
     fn leave(&self, epoch_id: usize, state: &ThreadState<T>) {
         match state.leave(epoch_id) {
             LeaveAction::None => {}
@@ -149,6 +151,8 @@ where
     T: Send,
 {
     collector: &'a Collector<T>,
+    thread_state: TLSThreadState<'a, T>,
+    retired_list: TLSRetiredList<'a, T>,
     /// Marker to make the struct neither [`Send`] nor [`Sync`]
     _phantom: PhantomData<*const ()>,
 }
@@ -160,10 +164,13 @@ where
     pub(super) fn new(collector: &'a Collector<T>) -> Self {
         Self {
             collector,
+            thread_state: collector.current_thread_state(),
+            retired_list: collector.current_retired_list(),
             _phantom: PhantomData,
         }
     }
 
+    #[inline]
     pub fn pin(&'_ self) -> Guard<'_, T, Self> {
         self.enter()
     }
@@ -173,16 +180,19 @@ impl<T> CollectorHandle<T> for LocalHandle<'_, T>
 where
     T: Send,
 {
+    #[inline]
     fn collector(&self) -> &Collector<T> {
         self.collector
     }
 
+    #[inline]
     fn thread_state(&self) -> TLSThreadState<'_, T> {
-        self.collector.current_thread_state()
+        self.thread_state.clone()
     }
 
+    #[inline]
     fn retired_list(&self) -> TLSRetiredList<'_, T> {
-        self.collector.current_retired_list()
+        self.retired_list.clone()
     }
 }
 
@@ -191,7 +201,9 @@ where
     T: Send,
 {
     collector: &'a Collector<T>,
-    thread: OwnedThread,
+    thread_state: TLSThreadState<'a, T>,
+    retired_list: TLSRetiredList<'a, T>,
+    _thread: OwnedThread,
 }
 
 impl<'a, T> OwnedHandle<'a, T>
@@ -199,31 +211,43 @@ where
     T: Send,
 {
     pub(super) fn new(collector: &'a Collector<T>) -> Self {
+        let thread = new_thread();
+        // Safety: the thread is owned by the handle
+        let thread_state = unsafe { collector.owned_thread_state(&thread) };
+        let retired_list = unsafe { collector.owned_retired_list(&thread) };
         Self {
             collector,
-            thread: new_thread(),
+            thread_state,
+            retired_list,
+            _thread: thread,
         }
     }
 
+    #[inline]
     pub fn pin(&'_ self) -> Guard<'_, T, Self> {
         self.enter()
     }
 }
 
+unsafe impl<T> Send for OwnedHandle<'_, T> where T: Send {}
+
 impl<T> CollectorHandle<T> for OwnedHandle<'_, T>
 where
     T: Send,
 {
+    #[inline]
     fn collector(&self) -> &Collector<T> {
         self.collector
     }
 
+    #[inline]
     fn thread_state(&'_ self) -> TLSThreadState<'_, T> {
-        self.collector.owned_thread_state(&self.thread)
+        self.thread_state.clone()
     }
 
+    #[inline]
     fn retired_list(&'_ self) -> TLSRetiredList<'_, T> {
-        self.collector.owned_retired_list(&self.thread)
+        self.retired_list.clone()
     }
 }
 
@@ -247,6 +271,7 @@ where
         }
     }
 
+    #[inline]
     pub fn pin(&'_ self) -> Guard<'_, T, Self> {
         self.enter()
     }
@@ -268,14 +293,17 @@ impl<T> CollectorHandle<T> for SharedHandle<T>
 where
     T: Send,
 {
+    #[inline]
     fn collector(&self) -> &Collector<T> {
         &*self.collector
     }
 
+    #[inline]
     fn thread_state(&'_ self) -> TLSThreadState<'_, T> {
         self.collector.current_thread_state()
     }
 
+    #[inline]
     fn retired_list(&self) -> TLSRetiredList<'_, T> {
         self.collector.current_retired_list()
     }
