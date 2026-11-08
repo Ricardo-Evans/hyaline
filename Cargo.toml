@@ -6,6 +6,18 @@ edition = "2024"
 [features]
 _loom = ["dep:derive_more", "dep:loom"]
 
+[profile.bench]
+debug = "full"
+
+[[bench]]
+name = "pin"
+harness = false
+
+[dev-dependencies]
+criterion = "0.8.2"
+crossbeam-epoch = "0.9.21"
+seize = "0.5.1"
+
 [dependencies]
 crossbeam-utils = "0.8.23"
 derive_more = { version = "2.1.1", features = ["full"], optional = true }
