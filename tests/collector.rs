@@ -131,50 +131,6 @@ fn owned_slot_reclaims() {
 }
 
 #[test]
-fn shared_joins_local() {
-    static RESOURCE: AtomicUsize = AtomicUsize::new(0);
-
-    run(|| {
-        let resource = Resource::reset(&RESOURCE);
-        let collector = hyaline::loom_support::Arc::new(Collector::new(1, 0));
-        let local = collector.make_local_handle();
-        let shared = Collector::make_shared_handle(&collector);
-        let local_guard = local.pin();
-        local_guard.retire(resource, Resource::reclaim);
-        let shared_guard = shared.pin();
-        drop(local_guard);
-        assert_eq!(resource.reclaimed_times(), 0);
-        drop(shared_guard);
-        assert_eq!(resource.reclaimed_times(), 1);
-    });
-}
-
-#[test]
-fn shared_peer_blocks() {
-    static RESOURCE: AtomicUsize = AtomicUsize::new(0);
-
-    run(|| {
-        let resource = Resource::reset(&RESOURCE);
-        let collector = hyaline::loom_support::Arc::new(Collector::new(2, 0));
-        let shared = Collector::make_shared_handle(&collector).clone();
-        let local = collector.make_local_handle();
-        let local_guard = local.pin();
-
-        let worker = spawn(move || {
-            let guard = shared.pin();
-            guard.retire(resource, Resource::reclaim);
-            guard.retire(resource, Resource::reclaim);
-            drop(guard);
-        });
-
-        worker.join().unwrap();
-        assert_eq!(resource.reclaimed_times(), 0);
-        drop(local_guard);
-        assert_eq!(resource.reclaimed_times(), 2);
-    });
-}
-
-#[test]
 fn overlap_makes_progress() {
     static RESOURCE: AtomicUsize = AtomicUsize::new(0);
 

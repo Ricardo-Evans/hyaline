@@ -1,6 +1,6 @@
-use crate::collector::handle::{LocalHandle, OwnedHandle, SharedHandle};
+use crate::collector::handle::{LocalHandle, OwnedHandle};
 use crate::loom_support;
-use crate::loom_support::{Arc, AtomicPtr, AtomicUsize};
+use crate::loom_support::{AtomicPtr, AtomicUsize};
 use crate::thread_local::{EntryValue, OwnedThread, ThreadLocal};
 use crossbeam_utils::CachePadded;
 use std::cell::Cell;
@@ -200,8 +200,7 @@ impl<T> Entry<T> {
     }
 }
 
-// SAFETY: `T` is `Send`; published state is immutable,
-// and the batch is protected by its atomic reference count.
+// SAFETY: `T` is `Send`; published state is immutable, and the batch is protected by its atomic reference count.
 unsafe impl<T> Send for Entry<T> where T: Send {}
 
 struct Batch<T> {
@@ -243,13 +242,6 @@ impl<T> LastEpoch<T> {
     fn is_active(&self) -> bool {
         self.guards.get() > 0
     }
-
-    #[inline]
-    fn leave(&self) -> usize {
-        let existing_guards = self.guards.get();
-        self.guards.set(existing_guards - 1);
-        existing_guards
-    }
 }
 
 struct CurrentEpoch {
@@ -262,26 +254,6 @@ impl CurrentEpoch {
     #[inline]
     fn is_active(&self) -> bool {
         self.guards.get() > 0
-    }
-
-    #[inline]
-    fn enter(&self) -> usize {
-        let existing_guards = self.guards.get();
-        self.guards.set(
-            existing_guards
-                .checked_add(1)
-                .expect("active epoch guards overflow"),
-        );
-        // make sure the counter does not overflow
-        self.pins.update(|pins| pins.saturating_add(1));
-        existing_guards
-    }
-
-    #[inline]
-    fn leave(&self) -> usize {
-        let existing_guards = self.guards.get();
-        self.guards.set(existing_guards - 1);
-        existing_guards
     }
 }
 
@@ -303,6 +275,7 @@ struct ThreadState<T> {
 
 enum EnterAction {
     None(EpochID),
+    Advance(EpochID),
     Activate(EpochID),
 }
 
@@ -320,13 +293,6 @@ enum LeaveAction<'a, T> {
 }
 
 impl<T> ThreadState<T> {
-    #[inline]
-    fn can_advance_epoch(&self, epoch_size: usize) -> bool {
-        epoch_size > 0
-            && self.current_epoch.pins.get() >= epoch_size
-            && !self.last_epoch.is_active()
-    }
-
     /// Advance the epoch after detaching the retired list
     #[inline]
     fn advance_epoch(&self, detached: *const Entry<T>) {
@@ -339,15 +305,37 @@ impl<T> ThreadState<T> {
     }
 
     #[inline]
-    fn enter(&self) -> EnterAction {
+    fn enter(&self, epoch_size: usize) -> EnterAction {
         let current_epoch = &self.current_epoch;
+        let existing_guards = current_epoch.guards.get();
         let epoch_id = self.epoch_id.get();
-        if current_epoch.enter() == 0 {
-            if self.last_epoch.is_active() {
-                EnterAction::None(epoch_id)
-            } else {
+        if epoch_size == 0 {
+            current_epoch.guards.set(
+                existing_guards
+                    .checked_add(1)
+                    .expect("epoch guards overflow"),
+            );
+            return if existing_guards == 0 {
                 EnterAction::Activate(epoch_id)
-            }
+            } else {
+                EnterAction::None(epoch_id)
+            };
+        }
+
+        let pins = current_epoch.pins.get().saturating_add(1);
+        current_epoch.guards.set(
+            existing_guards
+                .checked_add(1)
+                .expect("epoch guards overflow"),
+        );
+        current_epoch.pins.set(pins);
+
+        if self.last_epoch.is_active() {
+            EnterAction::None(epoch_id)
+        } else if existing_guards == 0 {
+            EnterAction::Activate(epoch_id)
+        } else if pins >= epoch_size {
+            EnterAction::Advance(epoch_id)
         } else {
             EnterAction::None(epoch_id)
         }
@@ -358,26 +346,26 @@ impl<T> ThreadState<T> {
         let current_epoch_id = self.epoch_id.get();
         if epoch_id == current_epoch_id {
             let current_epoch = &self.current_epoch;
-            if current_epoch.leave() == 1 {
-                if self.last_epoch.is_active() {
-                    LeaveAction::Defer
-                } else {
-                    LeaveAction::Deactivate
-                }
-            } else {
+            let guards = current_epoch.guards.get() - 1;
+            current_epoch.guards.set(guards);
+            if guards > 0 {
                 LeaveAction::None
+            } else if self.last_epoch.is_active() {
+                LeaveAction::Defer
+            } else {
+                LeaveAction::Deactivate
             }
         } else {
             debug_assert_eq!(epoch_id, current_epoch_id.wrapping_sub(1));
             let last_epoch = &self.last_epoch;
-            if last_epoch.leave() == 1 {
-                if self.current_epoch.is_active() {
-                    LeaveAction::Release(last_epoch)
-                } else {
-                    LeaveAction::DeactivateAndRelease(last_epoch)
-                }
-            } else {
+            let guards = last_epoch.guards.get() - 1;
+            last_epoch.guards.set(guards);
+            if guards > 0 {
                 LeaveAction::None
+            } else if self.current_epoch.is_active() {
+                LeaveAction::Release(last_epoch)
+            } else {
+                LeaveAction::DeactivateAndRelease(last_epoch)
             }
         }
     }
@@ -457,16 +445,6 @@ where
 
     pub fn make_owned_handle(&'_ self) -> OwnedHandle<'_, T> {
         OwnedHandle::new(self)
-    }
-
-    #[cfg(not(feature = "_loom"))]
-    pub fn make_shared_handle(self: &Arc<Self>) -> SharedHandle<T> {
-        SharedHandle::new(self.clone())
-    }
-
-    #[cfg(feature = "_loom")]
-    pub fn make_shared_handle(this: &Arc<Self>) -> SharedHandle<T> {
-        SharedHandle::new(this.clone())
     }
 
     fn current_thread_state(&'_ self) -> TLSThreadState<'_, T> {

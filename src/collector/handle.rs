@@ -1,10 +1,8 @@
 use crate::collector::{
-    Collector, EnterAction, Entry, LeaveAction, TLSRetiredList, TLSThreadState, ThreadState,
+    Collector, EnterAction, Entry, LeaveAction, TLSRetiredList, TLSThreadState,
 };
 use crate::loom_support;
-use crate::loom_support::Arc;
 use crate::thread_local::{OwnedThread, new_thread};
-use std::cell::Cell;
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
 
@@ -23,18 +21,14 @@ where
         let state = self.thread_state();
         let collector = self.collector();
 
-        let active_epoch = &state.current_epoch;
-
-        let epoch_id = match state.enter() {
-            EnterAction::None(epoch_id) => {
-                // try to advance the epoch
-                if state.can_advance_epoch(collector.epoch_size) {
-                    let retired_list = self.retired_list();
-                    let detached = retired_list
-                        .swap(std::ptr::null_mut(), Ordering::Acquire)
-                        .cast_const();
-                    state.advance_epoch(detached);
-                }
+        let epoch_id = match state.enter(collector.epoch_size) {
+            EnterAction::None(epoch_id) => epoch_id,
+            EnterAction::Advance(epoch_id) => {
+                let retired_list = self.retired_list();
+                let detached = retired_list
+                    .swap(std::ptr::null_mut(), Ordering::Acquire)
+                    .cast_const();
+                state.advance_epoch(detached);
                 epoch_id
             }
             EnterAction::Activate(epoch_id) => {
@@ -44,16 +38,20 @@ where
                 // loom cannot handle [`Ordering::SeqCst`] on atomic variables properly
                 #[cfg(feature = "_loom")]
                 loom_support::fence(Ordering::SeqCst);
-                // reset the pins to 1
-                active_epoch.pins.set(1);
                 epoch_id
             }
         };
         Guard {
             handle: self,
             epoch_id,
-            state,
+            _phantom: PhantomData,
         }
+    }
+
+    fn retire(&'_ self, data: T, operation: fn(T)) {
+        let collector = self.collector();
+        let state = self.thread_state();
+        collector.retire(&*state, data, operation);
     }
 
     fn release(begin: *const Entry<T>) {
@@ -81,7 +79,8 @@ where
     }
 
     #[inline]
-    fn leave(&self, epoch_id: usize, state: &ThreadState<T>) {
+    fn leave(&self, epoch_id: usize) {
+        let state = self.thread_state();
         match state.leave(epoch_id) {
             LeaveAction::None => {}
             LeaveAction::Release(last_epoch) => {
@@ -120,7 +119,7 @@ where
 {
     handle: &'g H,
     epoch_id: usize,
-    state: TLSThreadState<'g, T>,
+    _phantom: PhantomData<T>,
 }
 
 #[allow(private_bounds)]
@@ -130,9 +129,7 @@ where
     H: CollectorHandle<T>,
 {
     pub fn retire(&self, data: T, operation: fn(T)) {
-        self.handle
-            .collector()
-            .retire(&*self.state, data, operation);
+        self.handle.retire(data, operation);
     }
 }
 
@@ -142,7 +139,7 @@ where
     H: CollectorHandle<T>,
 {
     fn drop(&mut self) {
-        self.handle.leave(self.epoch_id, &*self.state)
+        self.handle.leave(self.epoch_id)
     }
 }
 
@@ -248,63 +245,5 @@ where
     #[inline]
     fn retired_list(&'_ self) -> TLSRetiredList<'_, T> {
         self.retired_list.clone()
-    }
-}
-
-pub struct SharedHandle<T>
-where
-    T: Send,
-{
-    collector: Arc<Collector<T>>,
-    /// Marker to make the struct not [`Sync`]
-    _phantom: PhantomData<Cell<()>>,
-}
-
-impl<T> SharedHandle<T>
-where
-    T: Send,
-{
-    pub(super) fn new(collector: Arc<Collector<T>>) -> Self {
-        Self {
-            collector,
-            _phantom: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub fn pin(&'_ self) -> Guard<'_, T, Self> {
-        self.enter()
-    }
-}
-
-impl<T> Clone for SharedHandle<T>
-where
-    T: Send,
-{
-    fn clone(&self) -> Self {
-        Self {
-            collector: self.collector.clone(),
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<T> CollectorHandle<T> for SharedHandle<T>
-where
-    T: Send,
-{
-    #[inline]
-    fn collector(&self) -> &Collector<T> {
-        &*self.collector
-    }
-
-    #[inline]
-    fn thread_state(&'_ self) -> TLSThreadState<'_, T> {
-        self.collector.current_thread_state()
-    }
-
-    #[inline]
-    fn retired_list(&self) -> TLSRetiredList<'_, T> {
-        self.collector.current_retired_list()
     }
 }
