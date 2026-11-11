@@ -3,6 +3,7 @@ use criterion::{
     BatchSize, BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main,
 };
 use crossbeam_utils::sync::WaitGroup;
+use hyaline::Handle;
 use seize::Guard;
 use std::hint::black_box;
 use std::sync::Arc;
