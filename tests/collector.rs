@@ -1,6 +1,6 @@
 //! Scenarios shared by the plain unit tests and the loom models.
 
-use hyaline::collector::Collector;
+use hyaline::Collector;
 use hyaline::loom_support::{mpsc, spawn};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;

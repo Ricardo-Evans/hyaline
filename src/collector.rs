@@ -1,4 +1,3 @@
-use crate::collector::handle::{LocalHandle, OwnedHandle};
 use crate::loom_support;
 use crate::loom_support::{AtomicPtr, AtomicUsize};
 use crate::thread_local::{EntryValue, OwnedThread, ThreadLocal};
@@ -11,6 +10,8 @@ use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
 pub mod handle;
+
+pub use handle::*;
 
 #[cfg(not(feature = "_loom"))]
 mod normal {
