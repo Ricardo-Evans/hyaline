@@ -1,7 +1,6 @@
 use crate::collector::{
     Collector, EnterAction, Entry, LeaveAction, TLSRetiredList, TLSThreadState,
 };
-use crate::loom_support;
 use crate::thread_local::{OwnedThread, new_thread};
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
@@ -37,7 +36,7 @@ where
                 retired_list.store(std::ptr::null_mut(), Ordering::SeqCst);
                 // loom cannot handle [`Ordering::SeqCst`] on atomic variables properly
                 #[cfg(feature = "_loom")]
-                loom_support::fence(Ordering::SeqCst);
+                crate::loom_support::fence(Ordering::SeqCst);
                 epoch_id
             }
         };
@@ -61,17 +60,15 @@ where
             // SAFETY: `current` is a published entry protected by its outstanding batch reference,
             // which should be at least 1 since this thread is leaving
             let batch = unsafe { (*current).batch };
-            // SAFETY: published entries have an initialized immutable `next`,
-            // read before releasing the current batch reference.
+            // SAFETY: published entries have an initialized immutable `next`, read before releasing the current batch reference.
             current = unsafe { (*current).state.next() };
             // Safety: the batch is not dropped yet since this thread is leaving, which means the reference count does not drop to zero yet,
             // and only const references to the reference count are made in this project.
             let references = unsafe { &batch.as_ref().references };
-            if references.fetch_sub(1, Ordering::Release) == 1 {
-                // barrier to synchronize with the other release on the reference count
-                loom_support::fence(Ordering::Acquire);
-                // SAFETY: this was the final reference after the [`Ordering::Acquire`] fence;
-                // reconstruct the leaked `Box` exactly once.
+            // a `Release` sub with an `Acquire` fence only in the zero case would also be correct but not worthwhile here,
+            // as this counter usually stays small, unlike a general-purpose reference counter.
+            if references.fetch_sub(1, Ordering::AcqRel) == 1 {
+                // SAFETY: this was the final reference; reconstruct the leaked `Box` exactly once.
                 let batch = unsafe { Box::from_raw(batch.as_ptr()) };
                 batch.free();
             }

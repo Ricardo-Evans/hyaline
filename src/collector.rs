@@ -584,8 +584,7 @@ where
         marked: usize,
         states: &mut EntryStates<'a, T>,
     ) -> usize {
-        // SAFETY: the detached batch is live,
-        // and its vector will not move or reallocate after entries are published.
+        // SAFETY: the detached batch is live, and its vector will not move or reallocate after entries are published.
         let entries = unsafe { (*batch.as_ptr()).entries.as_ptr() };
 
         let mut active = 0usize;
@@ -593,8 +592,7 @@ where
         for entry in (0..marked).map(|i| unsafe { entries.add(i).cast_mut() }) {
             // SAFETY: this entry is unpublished and its state is exclusively accessed.
             let state = unsafe { &mut (*entry).state };
-            // SAFETY: `mark_batch` marked this state once,
-            // and the referenced TLS retired list remains alive for the collector lifetime.
+            // SAFETY: `mark_batch` marked this state once, and the referenced TLS retired list remains alive for the collector lifetime.
             let head = unsafe { state.unmark(states) };
             let mut next = head.load(Ordering::Relaxed);
             loop {
@@ -630,25 +628,20 @@ where
         let batch = state.batch.replace(self.new_batch());
 
         if marked > 0 {
-            // SAFETY: the detached batch is live,
-            // and `references` is accessed only through atomic operations.
+            // SAFETY: the detached batch is live, and `references` is accessed only through atomic operations.
             let references = unsafe { &(*batch.as_ptr()).references };
-            // before link the batch to other threads, adjusting the reference count by `marked + 1` so it will not be dropped during this period
-            references.fetch_add(marked.wrapping_add(1), Ordering::Relaxed);
 
             let active = self.link_batch(batch, marked, &mut states);
-            // some previously marked threads may become inactive, adjusting the reference count by delta
-            let delta = (marked - active).wrapping_add(1);
-            if references.fetch_sub(delta, Ordering::Release) != delta {
+            // adjusting the reference count, note that some previously marked threads may become inactive now.
+            // a `Release` add with an `Acquire` fence only in the zero case would also be correct but not worthwhile here,
+            // as this counter usually stays small, unlike a general-purpose reference counter.
+            if references.fetch_add(active, Ordering::AcqRel) != active.wrapping_neg() {
                 // there are still some references to the batch
                 return true;
             }
         }
-        // either `mark_batch` founds no active threads, or the `link_batch` founds all active threads become inactive now
-        // barrier to synchronize with the release on the retired list and the other release on the reference count
-        loom_support::fence(Ordering::Acquire);
-        // SAFETY: the count is zero after the [`Ordering::Acquire`] fence, so the batch is exclusively owned now;
-        // reconstruct the leaked `Box` exactly once.
+        // either `mark_batch` founds no active threads, or all the active threads found by `link_batch` become inactive now.
+        // SAFETY: the count drops to zero, so the batch is exclusively owned now; reconstruct the leaked `Box` exactly once.
         let batch = unsafe { Box::from_raw(batch.as_ptr()) };
         batch.free();
 
