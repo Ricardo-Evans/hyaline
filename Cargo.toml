@@ -1,7 +1,13 @@
 [package]
 name = "hyaline"
 version = "0.1.0"
+description = "A safe and efficient deferred resource reclamation library for concurrent scenarios, powered by the Hyaline-1 algorithm."
 edition = "2024"
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://github.com/Ricardo-Evans/hyaline"
+keywords = ["garbage", "lock-free", "rcu", "reclamation", "smr"]
+categories = ["concurrency", "memory-management"]
 
 [features]
 _loom = ["dep:derive_more", "dep:loom"]
