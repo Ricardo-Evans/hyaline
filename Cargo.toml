@@ -10,7 +10,7 @@ keywords = ["garbage", "lock-free", "rcu", "reclamation", "smr"]
 categories = ["concurrency", "memory-management"]
 
 [features]
-_loom = ["dep:derive_more", "dep:loom"]
+loom = ["dep:derive_more", "dep:loom"]
 
 [profile.bench]
 debug = "full"

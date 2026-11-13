@@ -39,7 +39,7 @@ mod sealed {
                     // synchronize with the [`Ordering::SeqCst`] barrier in [`Collector::flush_batch`]
                     retired_list.store(std::ptr::null_mut(), Ordering::SeqCst);
                     // loom cannot handle [`Ordering::SeqCst`] on atomic variables properly
-                    #[cfg(feature = "_loom")]
+                    #[cfg(feature = "loom")]
                     crate::loom_support::fence(Ordering::SeqCst);
                     epoch_id
                 }

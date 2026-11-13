@@ -8,13 +8,13 @@ use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 
-#[cfg(not(feature = "_loom"))]
+#[cfg(not(feature = "loom"))]
 std::thread_local! {
     static THREAD: Cell<Option<Thread>> = const { Cell::new(None) };
     static THREAD_GUARD: Cell<ThreadGuard> = const { Cell::new(ThreadGuard { id: INVALID_THREAD_ID }) };
 }
 
-#[cfg(feature = "_loom")]
+#[cfg(feature = "loom")]
 loom::thread_local! {
     static THREAD: Cell<Option<Thread>> = Cell::new(None);
     static THREAD_GUARD: Cell<ThreadGuard> = Cell::new(ThreadGuard { id: INVALID_THREAD_ID });
@@ -55,7 +55,7 @@ impl Thread {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "_loom", allow(dead_code))]
+#[cfg_attr(feature = "loom", allow(dead_code))]
 struct ThreadGuard {
     id: ThreadID,
 }
@@ -63,7 +63,7 @@ struct ThreadGuard {
 impl Drop for ThreadGuard {
     fn drop(&mut self) {
         // we cannot access a lazy or thread local object during destruction in loom
-        #[cfg(not(feature = "_loom"))]
+        #[cfg(not(feature = "loom"))]
         if self.id != INVALID_THREAD_ID {
             THREAD.with(|thread| thread.take());
             thread_manager().free(self.id);
@@ -101,7 +101,7 @@ struct ThreadManager {
 }
 
 impl ThreadManager {
-    #[cfg(not(feature = "_loom"))]
+    #[cfg(not(feature = "loom"))]
     const fn new() -> Self {
         Self {
             free_from: AtomicThreadID::new(1),
@@ -109,7 +109,7 @@ impl ThreadManager {
         }
     }
 
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     fn new() -> Self {
         Self {
             free_from: AtomicThreadID::new(1),
@@ -117,12 +117,12 @@ impl ThreadManager {
         }
     }
 
-    #[cfg(not(feature = "_loom"))]
+    #[cfg(not(feature = "loom"))]
     fn free_list(&self) -> impl DerefMut<Target = BinaryHeap<Reverse<ThreadID>>> {
         self.free_list.lock()
     }
 
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     fn free_list(&self) -> impl DerefMut<Target = BinaryHeap<Reverse<ThreadID>>> {
         self.free_list.lock().unwrap()
     }
@@ -141,7 +141,7 @@ impl ThreadManager {
             // [`Ordering::SeqCst`] here to synchronize with potential fence outside [`Self::thread_id_limit_hint`]
             self.free_from.store(id + 1, Ordering::SeqCst);
             // loom cannot handle [`Ordering::SeqCst`] on atomic variables properly
-            #[cfg(feature = "_loom")]
+            #[cfg(feature = "loom")]
             crate::loom_support::fence(Ordering::SeqCst);
             id
         }
@@ -175,9 +175,9 @@ fn current_thread() -> Thread {
             let id = thread_manager().allocate();
             let thread = Thread::new(id);
             cell.set(Some(thread));
-            #[cfg(not(feature = "_loom"))]
+            #[cfg(not(feature = "loom"))]
             THREAD_GUARD.set(ThreadGuard { id });
-            #[cfg(feature = "_loom")]
+            #[cfg(feature = "loom")]
             THREAD_GUARD.with(|guard| guard.set(ThreadGuard { id }));
             thread
         }
@@ -185,10 +185,10 @@ fn current_thread() -> Thread {
 }
 
 fn thread_manager() -> &'static ThreadManager {
-    #[cfg(not(feature = "_loom"))]
+    #[cfg(not(feature = "loom"))]
     static MANAGER: crate::loom_support::LazyLock<ThreadManager> =
         crate::loom_support::LazyLock::new(|| ThreadManager::new());
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     crate::loom_support::lazy_static! {
         static ref MANAGER: ThreadManager = ThreadManager::new();
     }
@@ -211,14 +211,14 @@ impl<T> Entry<T> {
     unsafe fn read_value(&self) -> DefaultEntryValue<'_, T> {
         // SAFETY: the caller guarantees the value is initialized and immutable.
         unsafe {
-            #[cfg(not(feature = "_loom"))]
+            #[cfg(not(feature = "loom"))]
             let value = (*self.value.get()).assume_init_ref();
-            #[cfg(feature = "_loom")]
+            #[cfg(feature = "loom")]
             let guard = self.value.get();
-            #[cfg(feature = "_loom")]
+            #[cfg(feature = "loom")]
             let value = guard.deref().as_ptr();
             EntryValue {
-                #[cfg(feature = "_loom")]
+                #[cfg(feature = "loom")]
                 guard: guard.into(),
                 value,
                 _phantom: PhantomData,
@@ -229,7 +229,7 @@ impl<T> Entry<T> {
     /// # Safety
     ///
     /// The entry must be exclusively owned, uninitialized, and have no value references.
-    #[cfg(not(feature = "_loom"))]
+    #[cfg(not(feature = "loom"))]
     unsafe fn write_value(&self, value: T) -> DefaultEntryValue<'_, T> {
         // SAFETY: the caller guarantees exclusive access to uninitialized storage.
         let value_mut = unsafe { &mut *self.value.get() };
@@ -242,7 +242,7 @@ impl<T> Entry<T> {
     /// # Safety
     ///
     /// The entry must be exclusively owned, uninitialized, and have no value references.
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     unsafe fn write_value(&self, value: T) -> DefaultEntryValue<'_, T> {
         // SAFETY: the caller guarantees exclusive access to uninitialized storage.
         unsafe {
@@ -323,7 +323,7 @@ impl<T> Default for Entry<T> {
 }
 
 impl<T> Drop for Entry<T> {
-    #[cfg(not(feature = "_loom"))]
+    #[cfg(not(feature = "loom"))]
     fn drop(&mut self) {
         if *self.state.get_mut() == Self::READY {
             // SAFETY: `READY` means initialized and `&mut self` excludes users.
@@ -334,7 +334,7 @@ impl<T> Drop for Entry<T> {
         }
     }
 
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     fn drop(&mut self) {
         if self.state.with_mut(|v| *v) == Self::READY {
             // SAFETY: `READY` means initialized and `&mut self` excludes users.
@@ -347,14 +347,14 @@ impl<T> Drop for Entry<T> {
 }
 
 #[derive(Debug)]
-#[cfg_attr(not(feature = "_loom"), derive(Copy))]
-#[cfg_attr(not(feature = "_loom"), repr(transparent))]
+#[cfg_attr(not(feature = "loom"), derive(Copy))]
+#[cfg_attr(not(feature = "loom"), repr(transparent))]
 pub struct EntryValue<'a, T, G> {
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     guard: crate::loom_support::Arc<crate::loom_support::ConstPtr<G>>,
-    #[cfg(not(feature = "_loom"))]
+    #[cfg(not(feature = "loom"))]
     value: &'a T,
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     value: *const T,
     _phantom: PhantomData<&'a G>,
 }
@@ -362,12 +362,12 @@ pub struct EntryValue<'a, T, G> {
 impl<'a, T, G> EntryValue<'a, T, G> {
     #[inline]
     pub(crate) fn map<X>(self, f: impl FnOnce(&T) -> &X) -> EntryValue<'a, X, G> {
-        #[cfg(not(feature = "_loom"))]
+        #[cfg(not(feature = "loom"))]
         let value = EntryValue {
             value: f(self.value),
             _phantom: PhantomData,
         };
-        #[cfg(feature = "_loom")]
+        #[cfg(feature = "loom")]
         let value = EntryValue {
             guard: self.guard,
             // SAFETY: the guard is transferred to the result and keeps the
@@ -389,7 +389,7 @@ unsafe impl<T, G> Sync for EntryValue<'_, T, G> where T: Sync {}
 impl<T, G> Clone for EntryValue<'_, T, G> {
     fn clone(&self) -> Self {
         Self {
-            #[cfg(feature = "_loom")]
+            #[cfg(feature = "loom")]
             guard: self.guard.clone(),
             value: self.value,
             _phantom: PhantomData,
@@ -402,9 +402,9 @@ impl<T, G> Deref for EntryValue<'_, T, G> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        #[cfg(not(feature = "_loom"))]
+        #[cfg(not(feature = "loom"))]
         let value = self.value;
-        #[cfg(feature = "_loom")]
+        #[cfg(feature = "loom")]
         // SAFETY: the retained guard keeps the initialized pointee alive.
         let value = unsafe { &*self.value };
         value
@@ -448,14 +448,14 @@ where
         }
     }
 
-    #[cfg(not(feature = "_loom"))]
+    #[cfg(not(feature = "loom"))]
     pub const fn new() -> Self {
         Self {
             buckets: [const { AtomicPtr::new(std::ptr::null_mut()) }; BUCKET_COUNT],
         }
     }
 
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     pub fn new() -> Self {
         Self {
             buckets: from_fn(|_| AtomicPtr::new(std::ptr::null_mut())),
@@ -627,9 +627,9 @@ where
 {
     fn drop(&mut self) {
         for (bucket, bucket_ptr) in self.buckets.iter_mut().enumerate() {
-            #[cfg(not(feature = "_loom"))]
+            #[cfg(not(feature = "loom"))]
             let bucket_ptr = *bucket_ptr.get_mut();
-            #[cfg(feature = "_loom")]
+            #[cfg(feature = "loom")]
             let bucket_ptr = bucket_ptr.with_mut(|v| *v);
             if !bucket_ptr.is_null() {
                 // SAFETY: `&mut self` excludes users;
@@ -646,7 +646,7 @@ where
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::thread_local::{BUCKET_COUNT, ThreadID};
 
     #[test]
@@ -690,50 +690,5 @@ mod test {
         assert_eq!(super::entry_at(7), 3);
         assert_eq!(super::entry_at(8), 0);
         assert_eq!(super::entry_at(ThreadID::MAX), ThreadID::MAX / 2);
-    }
-}
-
-#[cfg(test)]
-#[cfg(feature = "_loom")]
-mod loom_test {
-    use crate::thread_local::new_thread;
-    use loom::sync::Arc;
-
-    #[test]
-    fn test() {
-        loom::model(|| {
-            let thread_local = Arc::new(super::ThreadLocal::<u64>::new());
-            thread_local.get_or_init(|| 1);
-            assert_eq!(thread_local.get().map(|v| *v), Some(1));
-
-            let thread_local_clone = thread_local.clone();
-            let thread = loom::thread::spawn(move || {
-                thread_local_clone.get_or_init(|| 2);
-                assert_eq!(thread_local_clone.get().map(|v| *v), Some(2));
-            });
-            thread.join().unwrap();
-
-            assert_eq!(thread_local.get().map(|v| *v), Some(1));
-        })
-    }
-
-    #[test]
-    fn test_send() {
-        loom::model(|| {
-            let thread_local = Arc::new(super::ThreadLocal::<u64>::new());
-            let thread = new_thread();
-            thread_local.get_or_init_by_thread(&thread, || 1);
-            assert_eq!(thread_local.get_by_thread(&thread).map(|v| *v), Some(1));
-
-            let thread_local_clone = thread_local.clone();
-            let thread = loom::thread::spawn(move || {
-                thread_local_clone.get_or_init_by_thread(&thread, || 2);
-                assert_eq!(
-                    thread_local_clone.get_by_thread(&thread).map(|v| *v),
-                    Some(1)
-                );
-            });
-            thread.join().unwrap();
-        })
     }
 }

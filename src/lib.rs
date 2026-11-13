@@ -1,5 +1,8 @@
 pub mod collector;
-pub mod loom_support;
+mod loom_support;
 mod thread_local;
+
+#[cfg(test)]
+mod tests;
 
 pub use collector::*;

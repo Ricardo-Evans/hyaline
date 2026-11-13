@@ -13,7 +13,7 @@ pub mod handle;
 
 pub use handle::*;
 
-#[cfg(not(feature = "_loom"))]
+#[cfg(not(feature = "loom"))]
 mod normal {
     use crate::collector::{Entry, TLSRetiredList};
     use crate::loom_support::AtomicPtr;
@@ -86,7 +86,7 @@ mod normal {
     }
 }
 
-#[cfg(feature = "_loom")]
+#[cfg(feature = "loom")]
 mod loom {
     use crate::collector::{Entry, TLSRetiredList};
     use crate::loom_support::AtomicPtr;
@@ -172,10 +172,10 @@ mod loom {
     }
 }
 
-#[cfg(not(feature = "_loom"))]
+#[cfg(not(feature = "loom"))]
 use normal::*;
 
-#[cfg(feature = "_loom")]
+#[cfg(feature = "loom")]
 use loom::*;
 
 struct Entry<T> {
@@ -408,7 +408,7 @@ impl<T> Collector<T>
 where
     T: Send,
 {
-    #[cfg(not(feature = "_loom"))]
+    #[cfg(not(feature = "loom"))]
     pub const fn new(batch_size: usize, epoch_size: usize) -> Self {
         assert!(batch_size > 0, "batch size must be greater than 0");
         Self {
@@ -419,7 +419,7 @@ where
         }
     }
 
-    #[cfg(feature = "_loom")]
+    #[cfg(feature = "loom")]
     pub fn new(batch_size: usize, epoch_size: usize) -> Self {
         assert!(batch_size > 0, "batch size must be greater than 0");
         Self {

@@ -1,7 +1,6 @@
-//! Scenarios shared by the plain unit tests and the loom models.
-
-use hyaline::loom_support::{mpsc, spawn};
-use hyaline::{Collector, Handle};
+use crate::loom_support::{mpsc, spawn};
+use crate::tests::run;
+use crate::{Collector, Handle};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -22,13 +21,6 @@ impl Resource {
     fn reclaimed_times(self) -> usize {
         self.0.load(Ordering::Relaxed)
     }
-}
-
-fn run(testcase: impl Fn() + Send + Sync + 'static) {
-    #[cfg(not(feature = "_loom"))]
-    testcase();
-    #[cfg(feature = "_loom")]
-    loom::model(testcase);
 }
 
 #[test]
