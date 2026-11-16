@@ -181,7 +181,7 @@ fn pin(c: &mut Criterion) {
     pin_seize(&mut group, &seize_collector, &resources);
     drop(seize_collector);
 
-    let hyaline_collector = hyaline::collector::Collector::<()>::new(BATCH_SIZE, 0);
+    let hyaline_collector = hyaline::Collector::<()>::new(BATCH_SIZE, 0);
     pin_hyaline(&mut group, &hyaline_collector, &resources);
     drop(hyaline_collector);
 }
@@ -198,7 +198,8 @@ fn recursive_pin(c: &mut Criterion) {
     let seize_collector = seize::Collector::new().batch_size(BATCH_SIZE);
     recursive_pin_seize(&mut group, &seize_collector, &resources);
     drop(seize_collector);
-    let hyaline_collector = hyaline::collector::Collector::<()>::new(BATCH_SIZE, 0);
+
+    let hyaline_collector = hyaline::Collector::<()>::new(BATCH_SIZE, 0);
     recursive_pin_hyaline(&mut group, &hyaline_collector, &resources);
     drop(hyaline_collector);
 }
@@ -237,7 +238,7 @@ fn concurrent_pin(c: &mut Criterion) {
     });
     drop(seize_collector);
 
-    let hyaline_collector = hyaline::collector::Collector::<()>::new(BATCH_SIZE, 0);
+    let hyaline_collector = hyaline::Collector::<()>::new(BATCH_SIZE, 0);
     std::thread::scope(|s| {
         let exit = make_threads(s, |ready, exit| {
             let hyaline_handle = hyaline_collector.make_local_handle();
@@ -287,7 +288,7 @@ fn concurrent_recursive_pin(c: &mut Criterion) {
     });
     drop(seize_collector);
 
-    let hyaline_collector = hyaline::collector::Collector::<()>::new(BATCH_SIZE, 0);
+    let hyaline_collector = hyaline::Collector::<()>::new(BATCH_SIZE, 0);
     std::thread::scope(|s| {
         let exit = make_threads(s, |ready, exit| {
             let hyaline_handle = hyaline_collector.make_local_handle();
@@ -341,7 +342,7 @@ fn pin_and_retire(c: &mut Criterion) {
     });
     drop(seize_collector);
 
-    let hyaline_collector = hyaline::collector::Collector::<()>::new(BATCH_SIZE, 0);
+    let hyaline_collector = hyaline::Collector::<()>::new(BATCH_SIZE, 0);
     std::thread::scope(|s| {
         let exit = make_threads(s, |ready, exit| {
             let hyaline_handle = hyaline_collector.make_local_handle();
@@ -414,7 +415,7 @@ fn retire(c: &mut Criterion) {
     });
     drop(seize_collector);
 
-    let hyaline_collector = hyaline::collector::Collector::<()>::new(BATCH_SIZE, 0);
+    let hyaline_collector = hyaline::Collector::<()>::new(BATCH_SIZE, 0);
     std::thread::scope(|s| {
         let exit = make_threads(s, |ready, exit| {
             let handle = hyaline_collector.make_local_handle();
