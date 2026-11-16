@@ -36,9 +36,9 @@ mod sealed {
                 }
                 EnterAction::Activate(epoch_id) => {
                     let retired_list = self.retired_list();
-                    // synchronize with the [`Ordering::SeqCst`] barrier in [`Collector::flush_batch`]
+                    // Synchronize with the `SeqCst` barrier in `Collector::flush_batch`.
                     retired_list.store(std::ptr::null_mut(), Ordering::SeqCst);
-                    // loom cannot handle [`Ordering::SeqCst`] on atomic variables properly
+                    // Loom cannot handle `SeqCst` on atomic variables properly.
                     #[cfg(feature = "loom")]
                     crate::loom_support::fence(Ordering::SeqCst);
                     epoch_id
@@ -52,18 +52,18 @@ mod sealed {
         }
 
         fn release(begin: *const Entry<T>) {
-            // adjusting reference counts of retired batches
+            // Adjusting reference counts of retired batches.
             let mut current = begin;
             while !current.is_null() {
                 // SAFETY: `current` is a published entry protected by its outstanding batch reference,
-                // which should be at least 1 since this thread is leaving
+                // which should be at least 1 since this thread is leaving.
                 let batch = unsafe { (*current).batch };
                 // SAFETY: published entries have an initialized immutable `next`, read before releasing the current batch reference.
                 current = unsafe { (*current).state.next() };
                 // Safety: the batch is not dropped yet since this thread is leaving, which means the reference count does not drop to zero yet,
                 // and only const references to the reference count are made in this project.
                 let references = unsafe { &batch.as_ref().references };
-                // a `Release` sub with an `Acquire` fence only in the zero case would also be correct but not worthwhile here,
+                // A `Release` sub with an `Acquire` fence only in the zero case would also be correct but not worthwhile here,
                 // as this counter usually stays small, unlike a general-purpose reference counter.
                 if references.fetch_sub(1, Ordering::AcqRel) == 1 {
                     // SAFETY: this was the final reference; reconstruct the leaked `Box` exactly once.
@@ -83,7 +83,7 @@ mod sealed {
                 }
                 LeaveAction::Defer => {}
                 LeaveAction::Deactivate => {
-                    // mark the thread as inactive
+                    // Mark the thread as inactive.
                     let begin = self
                         .retired_list()
                         .swap(Entry::INACTIVE, Ordering::AcqRel)
@@ -91,14 +91,14 @@ mod sealed {
                     Self::release(begin);
                 }
                 LeaveAction::DeactivateAndRelease(last_epoch) => {
-                    // mark the thread as inactive
+                    // Mark the thread as inactive.
                     let current_head = self
                         .retired_list()
                         .swap(Entry::INACTIVE, Ordering::AcqRel)
                         .cast_const();
-                    // read the last head before releasing, to avoid recursive operations during retiring try to advance the epoch
+                    // Read the last head before releasing, to avoid recursive operations during retiring try to advance the epoch.
                     let last_head = last_epoch.begin.get();
-                    // reverse ordered release
+                    // Reverse ordered release.
                     Self::release(current_head);
                     Self::release(last_head);
                 }
@@ -169,7 +169,7 @@ where
     collector: &'a Collector<T>,
     thread_state: TLSThreadState<'a, T>,
     retired_list: TLSRetiredList<'a, T>,
-    /// Marker to make the struct neither [`Send`] nor [`Sync`]
+    /// Marker to make the struct neither [`Send`] nor [`Sync`].
     _phantom: PhantomData<*const ()>,
 }
 
@@ -223,7 +223,7 @@ where
 {
     pub(super) fn new(collector: &'a Collector<T>) -> Self {
         let thread = new_thread();
-        // Safety: the thread is owned by the handle
+        // Safety: the thread is owned by the handle.
         let thread_state = unsafe { collector.owned_thread_state(&thread) };
         let retired_list = unsafe { collector.owned_retired_list(&thread) };
         Self {

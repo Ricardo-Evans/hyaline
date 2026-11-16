@@ -62,7 +62,7 @@ struct ThreadGuard {
 
 impl Drop for ThreadGuard {
     fn drop(&mut self) {
-        // we cannot access a lazy or thread local object during destruction in loom
+        // We cannot access a lazy or thread local object during destruction in loom.
         #[cfg(not(feature = "loom"))]
         if self.id != INVALID_THREAD_ID {
             THREAD.with(|thread| thread.take());
@@ -75,7 +75,7 @@ impl Drop for ThreadGuard {
 pub struct OwnedThread {
     id: ThreadID,
     thread: Thread,
-    /// Marker to make the struct ![`Sync`]
+    /// Marker to make the struct ![`Sync`].
     _phantom: PhantomData<Cell<()>>,
 }
 
@@ -132,15 +132,15 @@ impl ThreadManager {
         if let Some(Reverse(id)) = free_list.pop() {
             id
         } else {
-            // the free list mutex protects the free-from counter
+            // The free list mutex protects the free-from counter.
             let id = self.free_from.load(Ordering::Relaxed);
             if id == ThreadID::MAX {
                 std::hint::cold_path();
                 panic!("too many threads");
             }
-            // [`Ordering::SeqCst`] here to synchronize with potential fence outside [`Self::thread_id_limit_hint`]
+            // `SeqCst` here to synchronize with potential fence outside `Self::thread_id_limit_hint`.
             self.free_from.store(id + 1, Ordering::SeqCst);
-            // loom cannot handle [`Ordering::SeqCst`] on atomic variables properly
+            // Loom cannot handle `SeqCst` on atomic variables properly.
             #[cfg(feature = "loom")]
             crate::loom_support::fence(Ordering::SeqCst);
             id
@@ -268,7 +268,7 @@ impl<T> Entry<T> {
     ///
     /// The synchronization of the [`Ready`] state and value read must be guaranteed by the caller.
     unsafe fn get_owned(&self) -> Option<DefaultEntryValue<'_, T>> {
-        // `Relaxed` here is enough for the owned thread
+        // `Relaxed` here is enough for the owned thread.
         let state = self.state.load(Ordering::Relaxed);
         if state == Self::READY {
             // SAFETY: acquiring `READY` observes the initialized value.
@@ -282,13 +282,13 @@ impl<T> Entry<T> {
     ///
     /// The synchronization of the [`Ready`] state and value read must be guaranteed by the caller.
     unsafe fn get_or_init(&self, provider: impl FnOnce() -> T) -> DefaultEntryValue<'_, T> {
-        // `Relaxed` here is enough since only owned thread can initialize
+        // `Relaxed` here is enough since only owned thread can initialize.
         if self.state.load(Ordering::Relaxed) == Self::READY {
             // SAFETY: acquiring `READY` observes the initialized value.
             unsafe { self.read_value() }
         } else {
             let value = provider();
-            // `Relaxed` here is enough since only owned thread can initialize
+            // `Relaxed` here is enough since only owned thread can initialize.
             self.state
                 .compare_exchange(
                     Self::EMPTY,
@@ -478,7 +478,7 @@ where
         let atomic_bucket = &self.buckets[bucket];
         let bucket_ptr = atomic_bucket.load(Ordering::Acquire);
         if bucket_ptr.is_null() {
-            // bucket not initialized, should be rare
+            // Bucket not initialized, should be rare.
             std::hint::cold_path();
             let bucket = Self::allocate_bucket(bucket);
             match atomic_bucket.compare_exchange(
@@ -489,7 +489,7 @@ where
             ) {
                 Ok(_) => bucket.cast(),
                 Err(new_bucket) => {
-                    // concurrent initializations should be rare
+                    // Concurrent initializations should be rare.
                     debug_assert_ne!(new_bucket, std::ptr::null_mut());
                     std::hint::cold_path();
                     // SAFETY: this allocation lost the CAS, was never published, and remains uniquely owned here.
@@ -601,7 +601,7 @@ where
         self.buckets
             .iter()
             .enumerate()
-            // only these buckets may contain initialized entries
+            // Only these buckets may contain initialized entries.
             .take(bucket_limit + 1)
             .flat_map(move |(bucket_id, bucket)| {
                 let bucket = bucket.load(Ordering::Acquire).cast_const();
@@ -613,7 +613,7 @@ where
                     } else {
                         entry_limit
                     };
-                    // Safety: the bucket is allocated as a boxed slice
+                    // Safety: the bucket is allocated as a boxed slice.
                     unsafe { std::slice::from_raw_parts(bucket, len) }
                 }
             })

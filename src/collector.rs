@@ -247,7 +247,7 @@ impl<T> LastEpoch<T> {
 
 struct CurrentEpoch {
     guards: Cell<usize>,
-    /// the times of all pins
+    /// The times of all pins.
     pins: Cell<usize>,
 }
 
@@ -260,17 +260,17 @@ impl CurrentEpoch {
 
 type EpochID = usize;
 
-/// Thread local state of the collector, exclusively owned by the thread
+/// Thread local state of the collector, exclusively owned by the thread.
 struct ThreadState<T> {
-    /// the thread local batch
+    /// The thread local batch.
     batch: Cell<NonNull<Batch<T>>>,
-    /// the flush threshold
+    /// The flush threshold.
     flush_threshold: Cell<usize>,
-    /// the current epoch id
+    /// The current epoch id.
     epoch_id: Cell<EpochID>,
-    /// the last epoch
+    /// The last epoch.
     last_epoch: LastEpoch<T>,
-    /// the current epoch
+    /// The current epoch.
     current_epoch: CurrentEpoch,
 }
 
@@ -281,20 +281,20 @@ enum EnterAction {
 }
 
 enum LeaveAction<'a, T> {
-    /// No action needed
+    /// No action needed.
     None,
-    /// The current epoch is drained, but the last epoch is still active, defer the release to the last epoch
+    /// The current epoch is drained, but the last epoch is still active, defer the release to the last epoch.
     Defer,
-    /// The current epoch is drained, and the last epoch is inactive, deactivate the current epoch
+    /// The current epoch is drained, and the last epoch is inactive, deactivate the current epoch.
     Deactivate,
-    /// The last epoch is drained, but the current epoch is still active, only need to release the last epoch
+    /// The last epoch is drained, but the current epoch is still active, only need to release the last epoch.
     Release(&'a LastEpoch<T>),
-    /// The last epoch is drained, and the current epoch is inactive, deactivate and release the last epoch
+    /// The last epoch is drained, and the current epoch is inactive, deactivate and release the last epoch.
     DeactivateAndRelease(&'a LastEpoch<T>),
 }
 
 impl<T> ThreadState<T> {
-    /// Advance the epoch after detaching the retired list
+    /// Advance the epoch after detaching the retired list.
     #[inline]
     fn advance_epoch(&self, detached: *const Entry<T>) {
         let last_epoch = &self.last_epoch;
@@ -372,8 +372,7 @@ impl<T> ThreadState<T> {
     }
 }
 
-// SAFETY: handles provide exclusive logical ownership of the cells,
-// and `T` may be transferred to the thread that eventually frees the batch.
+// SAFETY: handles provide exclusive logical ownership of the cells, and `T` may be transferred to the thread that eventually frees the batch.
 unsafe impl<T> Send for ThreadState<T> where T: Send {}
 
 impl<T> Drop for ThreadState<T> {
@@ -395,12 +394,13 @@ pub struct Collector<T>
 where
     T: Send,
 {
-    /// once a batch reaches this size, try to retire it
+    /// Once a batch reaches this size, try to retire it.
     batch_size: usize,
-    /// once the total guards created in an epoch reach this size, try to advance the epoch
+    /// Once the total guards created in an epoch reach this size, try to advance the epoch.
     epoch_size: usize,
-    /// the thread local state
+    /// The thread local state.
     state: ThreadLocal<CachePadded<ThreadState<T>>>,
+    /// The head of the thread local retired list.
     retired: ThreadLocal<CachePadded<AtomicPtr<Entry<T>>>>,
 }
 
@@ -452,7 +452,7 @@ where
         if let Some(state) = self.state.get() {
             state.map(Deref::deref)
         } else {
-            // only need to initialize the thread state at most once for every single thread
+            // Only need to initialize the thread state at most once for every single thread.
             std::hint::cold_path();
             self.state
                 .get_or_init(|| self.new_thread_state())
@@ -465,12 +465,12 @@ where
     /// # Safety
     /// The caller must ensure the thread lives longer than the returned value.
     unsafe fn owned_thread_state(&'_ self, thread: &OwnedThread) -> TLSThreadState<'_, T> {
-        // Safety: this is why this function is unsafe
+        // Safety: this is why this function is unsafe.
         unsafe {
             if let Some(state) = self.state.get_by_thread_unsafe(thread) {
                 state.map(Deref::deref)
             } else {
-                // only need to initialize the thread state at most once for every single thread
+                // Only need to initialize the thread state at most once for every single thread.
                 std::hint::cold_path();
                 self.state
                     .get_or_init_by_thread_unsafe(thread, || self.new_thread_state())
@@ -483,7 +483,7 @@ where
         if let Some(retired_list) = self.retired.get() {
             retired_list.map(Deref::deref)
         } else {
-            // only need to initialize the retired list at most once for every single thread
+            // Only need to initialize the retired list at most once for every single thread.
             std::hint::cold_path();
             self.retired
                 .get_or_init(|| self.new_retired_list())
@@ -496,12 +496,12 @@ where
     /// # Safety
     /// The caller must ensure the thread lives longer than the returned value.
     unsafe fn owned_retired_list(&'_ self, thread: &OwnedThread) -> TLSRetiredList<'_, T> {
-        // Safety: this is why this function is unsafe
+        // Safety: this is why this function is unsafe.
         unsafe {
             if let Some(retired_list) = self.retired.get_by_thread_unsafe(thread) {
                 retired_list.map(Deref::deref)
             } else {
-                // only need to initialize the retired list at most once for every single thread
+                // Only need to initialize the retired list at most once for every single thread.
                 std::hint::cold_path();
                 self.retired
                     .get_or_init_by_thread_unsafe(thread, || self.new_retired_list())
@@ -559,19 +559,19 @@ where
     ) -> Option<usize> {
         let mut marked = 0usize;
         let mut entries_iterator = batch.entries.iter_mut();
-        // synchronize with the [`Ordering::SeqCst`] store in [`Self::enter`], also complies with the special exception of [`ThreadLocal::iter`]
+        // Synchronize with the `SeqCst` store in `Self::enter`, also complies with the special exception of `ThreadLocal::iter`.
         loom_support::fence(Ordering::SeqCst);
         for head in self
             .retired
             .iter()
-            // [`Ordering::Relaxed`] here for better performance, with a [`Ordering::Acquire`] fence later for correctness
+            // `Relaxed` here for better performance, with an `Acquire` fence later for correctness.
             .filter(|head| head.load(Ordering::Relaxed) != Entry::INACTIVE)
         {
             let Some(entry) = entries_iterator.next() else {
-                // the batch does not have enough entries, retry next time
+                // The batch does not have enough entries, retry next time.
                 return None;
             };
-            // store the head of the retired list to link later
+            // Store the head of the retired list to link later.
             entry.state.mark(head.clone().map(Deref::deref), states);
             marked += 1;
         }
@@ -598,12 +598,12 @@ where
             loop {
                 if next == Entry::INACTIVE {
                     std::hint::cold_path();
-                    // the thread becomes inactive, skip it.
+                    // The thread becomes inactive, skip it.
                     break;
                 }
                 // SAFETY: the entry is still unpublished and exclusively accessed.
                 unsafe { state.link(next) };
-                // try to link the entry to the retired list
+                // Try to link the entry to the retired list.
                 match head.compare_exchange_weak(next, entry, Ordering::Release, Ordering::Relaxed)
                 {
                     Ok(_) => {
@@ -623,8 +623,8 @@ where
             return false;
         };
 
-        // swap out the local batch, the batch will be dropped once the reference count drops to zero.
-        // we have to use pointers instead of references to avoid breaking aliasing rules
+        // Swap out the local batch, the batch will be dropped once the reference count drops to zero.
+        // We have to use pointers instead of references to avoid breaking aliasing rules.
         let batch = state.batch.replace(self.new_batch());
 
         if marked > 0 {
@@ -632,15 +632,15 @@ where
             let references = unsafe { &(*batch.as_ptr()).references };
 
             let active = self.link_batch(batch, marked, &mut states);
-            // adjusting the reference count, note that some previously marked threads may become inactive now.
-            // a `Release` add with an `Acquire` fence only in the zero case would also be correct but not worthwhile here,
+            // Adjusting the reference count, note that some previously marked threads may become inactive now.
+            // A `Release` add with an `Acquire` fence only in the zero case would also be correct but not worthwhile here,
             // as this counter usually stays small, unlike a general-purpose reference counter.
             if references.fetch_add(active, Ordering::AcqRel) != active.wrapping_neg() {
-                // there are still some references to the batch
+                // There are still some references to the batch.
                 return true;
             }
         }
-        // either `mark_batch` founds no active threads, or all the active threads found by `link_batch` become inactive now.
+        // Either `mark_batch` founds no active threads, or all the active threads found by `link_batch` become inactive now.
         // SAFETY: the count drops to zero, so the batch is exclusively owned now; reconstruct the leaked `Box` exactly once.
         let batch = unsafe { Box::from_raw(batch.as_ptr()) };
         batch.free();

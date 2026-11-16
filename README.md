@@ -17,7 +17,7 @@ A common approach in Rust is atomic reference counting (`Arc`). However, `Arc` r
 Here is a typical reader-writer example:
 
 ```rust
-// you may need some wrappers around the raw pointers, as `Collector` requires the resource type to be `Send` 
+// You may need some wrappers around the raw pointers, as `Collector` requires the resource type to be `Send`.
 fn create() -> *mut ResourceType {
     todo!("some creation logic")
 }
@@ -26,7 +26,6 @@ fn reclaim(resource: *mut ResourceType) {
     todo!("some reclamation logic")
 }
 
-// the core logic
 fn main() {
     let collector = Collector::new(batch_size, epoch_size);
     let resource = AtomicPtr::new(create());
@@ -35,22 +34,22 @@ fn main() {
     todo!("maybe some thread spawning")
     let handle = collector.make_local_handle();
     loop {
-        // All resources accessed after pinning are protected by the guard
+        // All resources accessed after pinning are protected by the guard.
         let guard = handle.pin();
-        // Load the current pointer
+        // Load the current pointer.
         let pointer = resource.load(Ordering::Acquire);
-        // SAFETY: The pointed-to resource will not be freed while protected by the guard
+        // SAFETY: The pointed-to resource will not be freed while protected by the guard.
         some_operation(unsafe { &*pointer });
-        // The guard is dropped here
+        // The guard is dropped here.
     }
 
     // writer
     todo!("maybe some thread spawning")
     let handle = collector.make_local_handle();
     let guard = handle.pin();
-    // From this point on, new readers will no longer observe the old resource
+    // From this point on, new readers will no longer observe the old resource.
     let to_be_reclaimed = resource.swap(create(), Ordering::AcqRel);
-    // reclaim will be called once hyaline ensures all potential readers holding the old resource have finished
+    // Reclaim will be called once hyaline ensures all potential readers holding the old resource have finished.
     guard.retire(to_be_reclaimed, reclaim)
 }
 ```
