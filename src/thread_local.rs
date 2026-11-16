@@ -1,4 +1,6 @@
-use crate::loom_support::{AtomicPtr, AtomicU8, AtomicUsize, Cell, Mutex, UnsafeCell};
+use crate::loom_support::{
+    AtomicPtr, AtomicU8, AtomicUsize, Cell, Mutex, UnsafeCell, thread_local,
+};
 use std::array::from_fn;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -9,13 +11,13 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 
 #[cfg(not(feature = "loom"))]
-std::thread_local! {
+thread_local! {
     static THREAD: Cell<Option<Thread>> = const { Cell::new(None) };
     static THREAD_GUARD: Cell<ThreadGuard> = const { Cell::new(ThreadGuard { id: INVALID_THREAD_ID }) };
 }
 
 #[cfg(feature = "loom")]
-loom::thread_local! {
+thread_local! {
     static THREAD: Cell<Option<Thread>> = Cell::new(None);
     static THREAD_GUARD: Cell<ThreadGuard> = Cell::new(ThreadGuard { id: INVALID_THREAD_ID });
 }
@@ -65,7 +67,7 @@ impl Drop for ThreadGuard {
         // We cannot access a lazy or thread local object during destruction in loom.
         #[cfg(not(feature = "loom"))]
         if self.id != INVALID_THREAD_ID {
-            THREAD.with(|thread| thread.take());
+            THREAD.take();
             thread_manager().free(self.id);
         }
     }
