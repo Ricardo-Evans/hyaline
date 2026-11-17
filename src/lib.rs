@@ -1,3 +1,5 @@
+//! Deferred memory reclamation for concurrent readers and writers, based on the Hyaline-1 algorithm.
+
 /// Infrastructure for deferred reclamation of memory allocated through [`Box`].
 pub mod boxed;
 /// Infrastructure for defer execution of arbitrary closures.

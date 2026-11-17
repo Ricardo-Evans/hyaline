@@ -73,6 +73,9 @@ impl Drop for ThreadGuard {
     }
 }
 
+/// A participant identity that owns one [`ThreadLocal`] slot.
+///
+/// The identity can move between threads. Dropping it frees the identity for reuse.
 #[derive(Debug)]
 pub struct OwnedThread {
     id: ThreadID,
@@ -164,6 +167,7 @@ impl ThreadManager {
     }
 }
 
+/// Allocates an [`OwnedThread`].
 pub fn new_thread() -> OwnedThread {
     let id = thread_manager().allocate();
     OwnedThread::new(id)
@@ -348,6 +352,10 @@ impl<T> Drop for Entry<T> {
     }
 }
 
+/// A wrapper of a thread local value obtained from [`ThreadLocal`].
+///
+/// This type is just a reference in normal usage.
+/// However, in loom we need to keep track of the guards obtained from [`UnsafeCell`], making it more complicated.
 #[derive(Debug)]
 #[cfg_attr(not(feature = "loom"), derive(Copy))]
 #[cfg_attr(not(feature = "loom"), repr(transparent))]
@@ -413,6 +421,7 @@ impl<T, G> Deref for EntryValue<'_, T, G> {
     }
 }
 
+/// An [`EntryValue`] for a value stored directly in its thread-local slot.
 pub type DefaultEntryValue<'a, T> = EntryValue<'a, T, MaybeUninit<T>>;
 
 /// A thread local storage.
@@ -450,6 +459,9 @@ where
         }
     }
 
+    /// Creates an empty thread local storage.
+    ///
+    /// Buckets are lazily allocated when a thread first initializes a value.
     #[cfg(not(feature = "loom"))]
     pub const fn new() -> Self {
         Self {
@@ -457,6 +469,9 @@ where
         }
     }
 
+    /// Creates an empty thread local storage.
+    ///
+    /// Buckets are lazily allocated when a thread first initializes a value.
     #[cfg(feature = "loom")]
     pub fn new() -> Self {
         Self {
@@ -464,6 +479,7 @@ where
         }
     }
 
+    /// Creates a thread local storage and allocating buckets for at least `size` thread identities.
     pub fn with_capacity(size: usize) -> Self {
         let allocated = BUCKET_COUNT - (size.leading_zeros() as usize);
         let buckets = from_fn(|bucket| {
@@ -515,6 +531,7 @@ where
         unsafe { entry.get_owned() }
     }
 
+    /// Get a reference to the value in the thread local storage for the current thread, if it exists.
     pub fn get(&self) -> Option<DefaultEntryValue<'_, T>> {
         self.get_inner(&current_thread())
     }

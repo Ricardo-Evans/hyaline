@@ -32,6 +32,7 @@ mod normal {
     pub(super) struct EntryStates<'a, T>(PhantomData<&'a T>);
 
     impl<T> EntryState<T> {
+        /// Make the entry state with the given retired-list head for later usage.
         #[inline]
         pub(super) fn mark<'a>(&mut self, head: TLSRetiredList<'a, T>, _: &mut EntryStates<'a, T>) {
             self.head = &*head;
@@ -41,7 +42,7 @@ mod normal {
         ///
         /// # Safety
         ///
-        /// The state must have been marked at lease once from the last unmark.
+        /// [`Self::mark`] must have stored a retired-list head in this state.
         #[inline]
         pub(super) unsafe fn unmark<'a>(
             &mut self,
@@ -65,7 +66,7 @@ mod normal {
         ///
         /// # Safety
         ///
-        /// The entry must have been linked and remain alive.
+        /// [`Self::link`] must have initialized this state.
         #[inline]
         pub(super) unsafe fn next(&self) -> *const Entry<T> {
             // SAFETY: `link` initialized the active `next` union field.
@@ -110,6 +111,7 @@ mod loom {
     }
 
     impl<T> EntryState<T> {
+        /// Make the entry state with the given retired-list head for later usage.
         #[inline]
         pub(super) fn mark<'a>(
             &mut self,
@@ -128,7 +130,7 @@ mod loom {
         ///
         /// # Safety
         ///
-        /// The state must have been marked at lease once from the last unmark.
+        /// [`Self::mark`] must have stored a retired-list head in this state.
         #[inline]
         pub(super) unsafe fn unmark<'a>(
             &mut self,
@@ -157,7 +159,7 @@ mod loom {
         ///
         /// # Safety
         ///
-        /// The entry must have been linked and remain alive.
+        /// [`Self::link`] must have initialized this state.
         #[inline]
         pub(super) unsafe fn next(&self) -> *const Entry<T> {
             match self {
@@ -238,7 +240,10 @@ impl<T> Batch<T> {
 }
 
 struct LastEpoch<T> {
+    /// The retired list head when a new epoch is created and this epoch become the last one.
+    /// Used as the beginning when traversing the retired list in this epoch.
     begin: Cell<*const Entry<T>>,
+    /// Count of active guards in this epoch.
     guards: Cell<usize>,
 }
 
@@ -250,8 +255,9 @@ impl<T> LastEpoch<T> {
 }
 
 struct CurrentEpoch {
+    /// Count of active guards in this epoch.
     guards: Cell<usize>,
-    /// The times of all pins.
+    /// Total times of pins started in this epoch, including guards that have already been dropped.
     pins: Cell<usize>,
 }
 
@@ -264,7 +270,7 @@ impl CurrentEpoch {
 
 type EpochID = usize;
 
-/// Thread local state of the collector, exclusively owned by the thread.
+/// Collector state for one thread identity.
 struct ThreadState<T> {
     /// The thread local batch.
     batch: Cell<NonNull<Batch<T>>>,
@@ -394,6 +400,7 @@ type TLSThreadState<'a, T> =
 type TLSRetiredList<'a, T> =
     EntryValue<'a, AtomicPtr<Entry<T>>, MaybeUninit<CachePadded<AtomicPtr<Entry<T>>>>>;
 
+/// A collector that runs a deferred operation once all guards that might still observe the value have been dropped.
 pub struct Collector<T>
 where
     T: Send,
@@ -434,6 +441,9 @@ where
         }
     }
 
+    /// Creates a collector, pre-allocating slots for at least `threads` thread identities.
+    ///
+    /// `batch_size` and `epoch_size` match [`Self::new`]. The `threads` is only a hint: a thread beyond it allocates its slot on first use.
     pub fn with_threads(batch_size: usize, epoch_size: usize, threads: usize) -> Self {
         assert!(batch_size > 0, "batch size must be greater than 0");
         Self {
@@ -444,10 +454,12 @@ where
         }
     }
 
+    /// Creates a [`LocalHandle`] for the current thread.
     pub fn make_local_handle(&self) -> LocalHandle<'_, T> {
         LocalHandle::new(self)
     }
 
+    /// Creates an [`OwnedHandle`] with a new thread identity, so it can move between threads.
     pub fn make_owned_handle(&'_ self) -> OwnedHandle<'_, T> {
         OwnedHandle::new(self)
     }
@@ -467,6 +479,7 @@ where
     /// Get the thread state for the given thread.
     ///
     /// # Safety
+    ///
     /// The caller must ensure the thread lives longer than the returned value.
     unsafe fn owned_thread_state(&'_ self, thread: &OwnedThread) -> TLSThreadState<'_, T> {
         // Safety: this is why this function is unsafe.
@@ -498,6 +511,7 @@ where
     /// Get the retired list for the given thread.
     ///
     /// # Safety
+    ///
     /// The caller must ensure the thread lives longer than the returned value.
     unsafe fn owned_retired_list(&'_ self, thread: &OwnedThread) -> TLSRetiredList<'_, T> {
         // Safety: this is why this function is unsafe.
