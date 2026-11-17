@@ -147,6 +147,10 @@ where
     T: Send,
     H: Handle<T>,
 {
+    pub fn handle(&self) -> &H {
+        self.handle
+    }
+
     pub fn retire(&self, data: T, operation: fn(T)) {
         self.handle.retire(data, operation);
     }
