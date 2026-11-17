@@ -9,7 +9,7 @@ mod sealed {
     use std::marker::PhantomData;
     use std::sync::atomic::Ordering;
 
-    pub(super) trait Handle<T>: Sized
+    pub(super) trait Handle<T>
     where
         T: Send,
     {
@@ -128,14 +128,14 @@ where
 impl<T, H> Handle<T> for H
 where
     T: Send,
-    H: SealedHandle<T>,
+    H: SealedHandle<T> + ?Sized,
 {
 }
 
 pub struct Guard<'g, T, H>
 where
     T: Send,
-    H: Handle<T>,
+    H: Handle<T> + ?Sized,
 {
     handle: &'g H,
     epoch_id: usize,
@@ -145,7 +145,7 @@ where
 impl<'g, T, H> Guard<'g, T, H>
 where
     T: Send,
-    H: Handle<T>,
+    H: Handle<T> + ?Sized,
 {
     pub fn handle(&self) -> &H {
         self.handle
@@ -159,7 +159,7 @@ where
 impl<T, H> Drop for Guard<'_, T, H>
 where
     T: Send,
-    H: Handle<T>,
+    H: Handle<T> + ?Sized,
 {
     fn drop(&mut self) {
         self.handle.leave(self.epoch_id)
