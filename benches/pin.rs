@@ -3,7 +3,7 @@ use criterion::{
     BatchSize, BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main,
 };
 use crossbeam_utils::sync::WaitGroup;
-use hyaline::Handle;
+use hyaline::{Pinnable, Retire};
 use seize::Guard;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -350,7 +350,7 @@ fn pin_and_retire(c: &mut Criterion) {
             while !exit.load(Ordering::Relaxed) {
                 let guard = hyaline_handle.pin();
                 for _ in 0..BATCH_SIZE {
-                    guard.retire((), reclaim);
+                    guard.handle().retire((), reclaim);
                 }
             }
         });
@@ -432,7 +432,7 @@ fn retire(c: &mut Criterion) {
                     for _ in 0..GUARD_COUNT {
                         let guard = handle.pin();
                         for _ in 0..OPERATION_COUNT {
-                            guard.retire((), reclaim);
+                            guard.handle().retire((), reclaim);
                         }
                     }
                 },

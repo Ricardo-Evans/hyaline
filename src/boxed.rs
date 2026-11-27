@@ -1,4 +1,4 @@
-use crate::Handle;
+use crate::Retire;
 
 /// A wrapper around a raw heap pointer to be reclaimed, intended for deferred memory reclaim through [`crate::Collector`].
 ///
@@ -43,7 +43,7 @@ impl Boxed {
 unsafe impl Send for Boxed {}
 
 /// A [`Handle`] that can defer dropping a [`Box`].
-pub trait BoxedHandle: Handle<Boxed> {
+pub trait BoxedHandle: Retire<Boxed> {
     /// Defers dropping the [`Box`] behind `pointer`.
     ///
     /// The collector drops it once every [`crate::Guard`] that might still observe it has ended.
@@ -61,4 +61,4 @@ pub trait BoxedHandle: Handle<Boxed> {
     }
 }
 
-impl<T> BoxedHandle for T where T: Handle<Boxed> {}
+impl<T> BoxedHandle for T where T: Retire<Boxed> {}

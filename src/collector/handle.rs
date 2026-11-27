@@ -1,6 +1,8 @@
-use crate::collector::{Collector, TLSRetiredList, TLSThreadState};
-use crate::handle::sealed::Handle as SealedHandle;
+use crate::Retire;
+use crate::collector::{TLSRetiredList, TLSThreadState};
+use crate::pinnable::Pinnable;
 use crate::thread_local::{OwnedThread, new_thread};
+use crate::{Collector, PinnableOnce};
 use std::marker::PhantomData;
 
 mod sealed {
@@ -107,29 +109,44 @@ mod sealed {
     }
 }
 
+use sealed::Handle as SealedHandle;
+
 #[allow(private_bounds)]
 pub trait Handle<T>: SealedHandle<T>
 where
     T: Send,
 {
+}
+
+impl<T, X> Handle<T> for X
+where
+    T: Send,
+    X: SealedHandle<T> + ?Sized,
+{
+}
+
+impl<T, H> Pinnable<T, H> for H
+where
+    T: Send,
+    H: Handle<T> + ?Sized,
+{
     #[inline]
-    fn pin(&'_ self) -> Guard<'_, T, Self> {
+    fn pin(&'_ self) -> Guard<'_, T, H> {
         self.enter()
     }
+}
 
+impl<T, H> Retire<T> for H
+where
+    T: Send,
+    H: Handle<T> + ?Sized,
+{
     #[inline]
     fn retire(&self, data: T, operation: fn(T)) {
         let collector = self.collector();
         let state = self.thread_state();
         collector.retire(&*state, data, operation);
     }
-}
-
-impl<T, H> Handle<T> for H
-where
-    T: Send,
-    H: SealedHandle<T> + ?Sized,
-{
 }
 
 pub struct Guard<'g, T, H>
@@ -147,12 +164,22 @@ where
     T: Send,
     H: Handle<T> + ?Sized,
 {
+    #[inline]
     pub fn handle(&self) -> &H {
         self.handle
     }
+}
 
-    pub fn retire(&self, data: T, operation: fn(T)) {
-        self.handle.retire(data, operation);
+impl<'a, T, H> PinnableOnce<'a, T, H> for Guard<'a, T, H>
+where
+    T: Send,
+    H: Handle<T> + ?Sized,
+{
+    fn pin_once(self) -> Guard<'a, T, H>
+    where
+        Self: 'a,
+    {
+        self
     }
 }
 

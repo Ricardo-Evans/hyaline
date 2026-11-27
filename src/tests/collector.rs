@@ -1,6 +1,6 @@
 use crate::loom_support::{mpsc, spawn};
 use crate::tests::run;
-use crate::{Collector, Handle};
+use crate::{Collector, Pinnable, Retire};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -32,7 +32,7 @@ fn pin_blocks_reclaim() {
         let collector = Collector::new(1, 0);
         let handle = collector.make_local_handle();
         let guard = handle.pin();
-        guard.retire(resource, Resource::reclaim);
+        guard.handle().retire(resource, Resource::reclaim);
         assert_eq!(resource.reclaimed_times(), 0);
         drop(guard);
         assert_eq!(resource.reclaimed_times(), 1);
@@ -49,7 +49,7 @@ fn overlap_blocks_reclaim() {
         let handle = collector.make_local_handle();
         let outer = handle.pin();
         let inner = handle.pin();
-        outer.retire(resource, Resource::reclaim);
+        outer.handle().retire(resource, Resource::reclaim);
         assert_eq!(resource.reclaimed_times(), 0);
         drop(outer);
         assert_eq!(resource.reclaimed_times(), 0);
@@ -72,8 +72,8 @@ fn local_peer_blocks() {
         let worker = spawn(move || {
             let handle = collector_for_worker.make_local_handle();
             let guard = handle.pin();
-            guard.retire(resource, Resource::reclaim);
-            guard.retire(resource, Resource::reclaim);
+            guard.handle().retire(resource, Resource::reclaim);
+            guard.handle().retire(resource, Resource::reclaim);
             drop(guard);
         });
 
@@ -95,8 +95,8 @@ fn owned_blocks_reclaim() {
         let handle = collector.make_owned_handle();
         let owned_guard = handle.pin();
         let local_guard = local.pin();
-        owned_guard.retire(resource, Resource::reclaim);
-        owned_guard.retire(resource, Resource::reclaim);
+        owned_guard.handle().retire(resource, Resource::reclaim);
+        owned_guard.handle().retire(resource, Resource::reclaim);
         drop(local_guard);
         assert_eq!(resource.reclaimed_times(), 0);
         drop(owned_guard);
@@ -114,7 +114,7 @@ fn owned_slot_reclaims() {
         let local = collector.make_local_handle();
         let handle = collector.make_owned_handle();
         let owned_guard = handle.pin();
-        owned_guard.retire(resource, Resource::reclaim);
+        owned_guard.handle().retire(resource, Resource::reclaim);
         let local_guard = local.pin();
         drop(owned_guard);
         assert_eq!(resource.reclaimed_times(), 1);
@@ -136,7 +136,7 @@ fn overlap_makes_progress() {
         let mut steps = 0;
 
         for _ in 0..8 {
-            guard.retire(resource, Resource::reclaim);
+            guard.handle().retire(resource, Resource::reclaim);
             retired += 1;
             let next = handle.pin();
             drop(guard);
@@ -174,12 +174,12 @@ fn concurrent_reclaims_once() {
             let handle = collector_for_worker.make_local_handle();
             let guard = handle.pin();
             ready_tx.send(()).unwrap();
-            guard.retire(resource, Resource::reclaim);
-            guard.retire(resource, Resource::reclaim);
+            guard.handle().retire(resource, Resource::reclaim);
+            guard.handle().retire(resource, Resource::reclaim);
         });
         ready_rx.recv().unwrap();
-        guard.retire(resource, Resource::reclaim);
-        guard.retire(resource, Resource::reclaim);
+        guard.handle().retire(resource, Resource::reclaim);
+        guard.handle().retire(resource, Resource::reclaim);
         drop(guard);
         worker.join().unwrap();
         assert_eq!(resource.reclaimed_times(), 4);

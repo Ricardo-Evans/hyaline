@@ -1,4 +1,4 @@
-use crate::Handle;
+use crate::Retire;
 use std::mem::MaybeUninit;
 
 /// A layout placeholder with the size and alignment of `N` pointers.
@@ -13,7 +13,7 @@ unsafe impl<const N: usize> Send for PointerSized<N> {}
 /// A wrapper around a closure to be invoked later, intended for deferred execution through [`crate::Collector`].
 ///
 /// The type parameter is a placeholder used to control the size and alignment of the closure storage.
-/// The placeholder will never be constructed, but it must be [`Send`] to match the requirements of [`Handle`].
+/// The placeholder will never be constructed, but it must be [`Send`] to match the requirements of [`crate::Collector`].
 ///
 /// A closure that fits is stored in place, or boxed when a [`Box`] fits in the same slot, otherwise a compile-time error is thrown.
 /// Thus, a commonly used placeholder is [`PointerSized`], as a closure contains at least a function pointer, while a [`Box`] always fits too.
@@ -138,7 +138,7 @@ impl<T> Closure<T> {
 unsafe impl<T> Send for Closure<T> where T: Send {}
 
 /// A [`Handle`] that can defer a closure stored in [`Closure`].
-pub trait ClosureHandle<T>: Handle<Closure<T>>
+pub trait ClosureHandle<T>: Retire<Closure<T>>
 where
     T: Send,
 {
@@ -171,6 +171,6 @@ where
 impl<X, T> ClosureHandle<T> for X
 where
     T: Send,
-    X: Handle<Closure<T>>,
+    X: Retire<Closure<T>>,
 {
 }

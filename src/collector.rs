@@ -10,8 +10,12 @@ use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
 pub mod handle;
+pub mod pinnable;
+pub mod retire;
 
 pub use handle::*;
+pub use pinnable::*;
+pub use retire::*;
 
 #[cfg(not(feature = "loom"))]
 mod normal {
